@@ -2,11 +2,11 @@
 #include <FastLED.h>
 
 // SevenSegment
-const byte latchPin = 12;   // Pin connected to Pin 5 of 74HC595 (Latch)
-const byte dataPin  = 14;   // Pin connected to Pin 6 of 74HC595 (Data)
-const byte clockPin = 13;   // Pin connected to Pin 7 of 74HC595 (Clock)
+const byte LATCH_PIN = 12;   // Pin connected to Pin 5 of 74HC595 (Latch)
+const byte DATA_PIN  = 14;   // Pin connected to Pin 6 of 74HC595 (Data)
+const byte CLOCK_PIN = 13;   // Pin connected to Pin 7 of 74HC595 (Clock)
 
-SevenSegment sevseg = SevenSegment(latchPin, dataPin, clockPin);
+SevenSegment sevseg = SevenSegment(LATCH_PIN, DATA_PIN, CLOCK_PIN);
 // end SevenSegment
 
 // Timing
