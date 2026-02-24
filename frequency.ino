@@ -16,7 +16,7 @@ long interval = 10;
 
 // Configuration
 #define LED_PIN     15          // Pin connected to data line
-#define NUM_LEDS    60         // Number of LEDs in your strip
+#define NUM_LEDS    256         // Number of LEDs in your strip
 #define BRIGHTNESS  64         // 0-255 (Keep low for testing)
 #define LED_TYPE    WS2812B    // Chipset
 #define COLOR_ORDER GRB        // Typical color order for WS2812B
@@ -51,16 +51,8 @@ void loop() {
 
   unsigned long currentMillis = millis();
   if(currentMillis - previousMillis > interval) {
-    sevseg.showNumber(numLedsToLight);
+    sevseg.showNumber(numLedsToLight, true);
 
     previousMillis = currentMillis;
   }
-}void setup() {
-  // put your setup code here, to run once:
-
-}
-
-void loop() {
-  // put your main code here, to run repeatedly:
-
 }
