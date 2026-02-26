@@ -10,16 +10,18 @@ SevenSegment sevseg = SevenSegment(LATCH_PIN, DATA_PIN, CLOCK_PIN);
 // end SevenSegment
 
 // Timing
-long intervalMultiplier = 1; // helps to slow things down if I want it
-long prevFreqMillis = 0;
-long freqInterval = 50 * intervalMultiplier;
-long peakInterval = 75 * intervalMultiplier;
+long intervalMultiplier = 5; // helps to slow things down if I want it
+long prevWaveMillis = 0;
+long waveInterval = 48 * intervalMultiplier;
+long colInterval = waveInterval / 8;
+long prevColMillis = millis() + (colInterval * 2);
+long peakInterval = colInterval * 2;
 // end Timing
 
 // Configuration
 #define LED_PIN 15        // Pin connected to data line
 #define NUM_LEDS 256      // Number of LEDs in your strip
-#define BRIGHTNESS 4      // 0-255 (Keep low for testing)
+#define BRIGHTNESS 16     // 0-255 (Keep low for testing)
 #define LED_TYPE WS2812B  // Chipset
 #define COLOR_ORDER GRB   // Typical color order for WS2812B
 #define ANALOG A0
@@ -27,22 +29,25 @@ long peakInterval = 75 * intervalMultiplier;
 // Array to hold LED color data
 CRGB leds[NUM_LEDS];
 
-// 8x32 code
-int cols = 32;
-int rows = 8;
-std::vector<int> getColumnArray(int col, int height);
-int colToLight = 0;
-int heights[32] = {1};
-int peakHangTime = 2;
-CRGB amplitudeColor = CRGB::CornflowerBlue;
-CRGB peakColor = CRGB::LightSlateGray;
-
+// display data
 struct peakData {
   int value;
   long timestamp;
 };
 
-peakData peaks[32] = {0};
+const int numCols = 32;
+const int numRows = 8;
+
+peakData peaks[numCols] = {0};
+int waveHeights[numCols] = {0};
+int colHeights[numCols] = {0};
+int peakHangTime = 4;
+// CRGB amplitudeColor = CRGB::CornflowerBlue;
+// CRGB peakColor = CRGB::LightSlateGray;
+CRGB amplitudeColor = CRGB::Blue;
+CRGB peakColor = CRGB::Red;
+
+std::vector<int> getColumnArray(int col, int height);
 
 void setup() {
   FastLED.addLeds<LED_TYPE, LED_PIN, COLOR_ORDER>(leds, NUM_LEDS).setCorrection(TypicalLEDStrip);
@@ -53,37 +58,56 @@ void setup() {
 
 void loop() {
   unsigned long currentMillis = millis();
+  std::vector<int> allCols;
 
-  if (currentMillis - prevFreqMillis > freqInterval) {  // don't update every loop because that makes things blurry
+  // GENERATE WAVE DATA
+  if (currentMillis - prevWaveMillis > waveInterval) {
+    for(int i = 0; i < numCols; i++) {
+      int height = beatsin8(64, 0, 8, i * 96);  // this generates the y value for each i-th column
+      waveHeights[i] = height * random8(height) / height; // addin some random variance
+    }
+  }
+
+  // DRAW COLUMNS
+  if (currentMillis - prevColMillis > colInterval) {
     FastLED.clear();
 
-    for(int i = 0; i < cols; i++) {
-      int height = beatsin8(64, 0, 8, i * 96);  // this generates the y value for each x as the i-th column. I was trying to use multipels of 32 to keep the sine wave from appearing to move to the right
-      heights[i] = height * random8(height) / height; // addin some random variance
-      std::vector<int> colLEDs = getColumnArray(i, heights[i]); // get the id numbers for the column of leds
+    // set the height of the columns of light
+    for(int i = 0; i < numCols; i++) {
+      if(colHeights[i] > waveHeights[i]){
+        colHeights[i]--;
+      }
+
+      if(colHeights[i] < waveHeights[i]){
+        colHeights[i]++;
+      }
+
+      std::vector<int> colLEDs = getColumnArray(i, colHeights[i]); // get the id numbers for each led in the column
 
       for(int light : colLEDs) {  // for each of those column leds, set their color
         leds[light] = amplitudeColor;
       }
     }
 
-    for(int i = 0; i < cols; i++) { // this finds the peak values for each column using the height that was calculated in the last for loop
-      if(heights[i] >= peaks[i].value) {
-        peaks[i].value = heights[i];
+    // set peak values
+    for(int i = 0; i < numCols; i++) {
+      if(colHeights[i] >= peaks[i].value){
+        // I would like for the peaks to completely disappear if the height has been zero for long enough
+        peaks[i].value = colHeights[i];
         peaks[i].timestamp = currentMillis + (peakInterval * peakHangTime);
       }
       
-      if(peaks[i].value > -1) {
+      if(peaks[i].value >= 0) {
         leds[getLEDFromCoordinate(i, peaks[i].value)] = peakColor;
       }
-      // leds[getLEDFromCoordinate(i, peaks[i].value)] = peakColor;
     }
 
     FastLED.show();
-    prevFreqMillis = currentMillis;
+    prevColMillis = currentMillis;
   }
 
-  for(int i = 0; i < cols; i++) {
+  // PEAK DECAY
+  for(int i = 0; i < numCols; i++) {
     if(long(currentMillis) - peaks[i].timestamp > peakInterval) {
       peaks[i].value--;
       peaks[i].timestamp = currentMillis;
@@ -101,10 +125,10 @@ int getLEDFromCoordinate(int x, int y) {
 
   if (x % 2 == 1) {
     xStart = x * 8;
-    light = xStart + y - 1;
+    light = xStart + y;
   } else {
     xStart = x * 8 + 7;
-    light = xStart - y + 1;
+    light = xStart - y;
   }
 
   return light;
