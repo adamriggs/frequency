@@ -10,9 +10,10 @@ SevenSegment sevseg = SevenSegment(LATCH_PIN, DATA_PIN, CLOCK_PIN);
 // end SevenSegment
 
 // Timing
+long intervalMultiplier = 1; // helps to slow things down if I want it
 long prevFreqMillis = 0;
-long freqInterval = 50;
-long peakInterval = 75;
+long freqInterval = 50 * intervalMultiplier;
+long peakInterval = 75 * intervalMultiplier;
 // end Timing
 
 // Configuration
@@ -53,26 +54,29 @@ void setup() {
 void loop() {
   unsigned long currentMillis = millis();
 
-  if (currentMillis - prevFreqMillis > freqInterval) {
-    std::vector<int> lights;
+  if (currentMillis - prevFreqMillis > freqInterval) {  // don't update every loop because that makes things blurry
     FastLED.clear();
 
     for(int i = 0; i < cols; i++) {
-      int height = beatsin8(60, 0, 8, i * 90);
-      heights[i] = height * random8(height) / height;
-      std::vector<int> colLights = getColumnArray(i, heights[i]);
+      int height = beatsin8(64, 0, 8, i * 96);  // this generates the y value for each x as the i-th column. I was trying to use multipels of 32 to keep the sine wave from appearing to move to the right
+      heights[i] = height * random8(height) / height; // addin some random variance
+      std::vector<int> colLEDs = getColumnArray(i, heights[i]); // get the id numbers for the column of leds
 
-      for(int light : colLights) {
+      for(int light : colLEDs) {  // for each of those column leds, set their color
         leds[light] = amplitudeColor;
       }
     }
 
-    for(int i = 0; i < cols; i++) {
+    for(int i = 0; i < cols; i++) { // this finds the peak values for each column using the height that was calculated in the last for loop
       if(heights[i] >= peaks[i].value) {
         peaks[i].value = heights[i];
         peaks[i].timestamp = currentMillis + (peakInterval * peakHangTime);
       }
-      leds[getLEDFromCoordinate(i, peaks[i].value)] = peakColor;
+      
+      if(peaks[i].value > -1) {
+        leds[getLEDFromCoordinate(i, peaks[i].value)] = peakColor;
+      }
+      // leds[getLEDFromCoordinate(i, peaks[i].value)] = peakColor;
     }
 
     FastLED.show();
@@ -108,24 +112,24 @@ int getLEDFromCoordinate(int x, int y) {
 
 // return array of leds to light for a column
 std::vector<int> getColumnArray(int col, int height) {
-  std::vector<int> lights;
+  std::vector<int> colLEDs;
   int colStart;
 
   if (col % 2 == 1) {
     colStart = col * 8;
 
     for (int i = colStart; i < (colStart + height); i++) {
-      lights.push_back(i);
+      colLEDs.push_back(i);
     }
   } else {
     colStart = col * 8 + 7;
 
     for (int i = colStart; i > (colStart - height); i--) {
-      lights.push_back(i);
+      colLEDs.push_back(i);
     }
   }
 
-  return lights;
+  return colLEDs;
 }
 
 void printVector(const std::vector<int>& vec) {
