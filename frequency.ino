@@ -10,14 +10,15 @@ SevenSegment sevseg = SevenSegment(LATCH_PIN, DATA_PIN, CLOCK_PIN);
 // end SevenSegment
 
 // Timing
-long previousMillis = 0;
-long interval = 1000;
+long prevFreqMillis = 0;
+long freqInterval = 50;
+long peakInterval = 75;
 // end Timing
 
 // Configuration
 #define LED_PIN 15        // Pin connected to data line
 #define NUM_LEDS 256      // Number of LEDs in your strip
-#define BRIGHTNESS 64     // 0-255 (Keep low for testing)
+#define BRIGHTNESS 4      // 0-255 (Keep low for testing)
 #define LED_TYPE WS2812B  // Chipset
 #define COLOR_ORDER GRB   // Typical color order for WS2812B
 #define ANALOG A0
@@ -25,13 +26,22 @@ long interval = 1000;
 // Array to hold LED color data
 CRGB leds[NUM_LEDS];
 
-int val;
-int numLedsToLight;
-
+// 8x32 code
 int cols = 32;
 int rows = 8;
 std::vector<int> getColumnArray(int col, int height);
 int colToLight = 0;
+int heights[32] = {1};
+int peakHangTime = 2;
+CRGB amplitudeColor = CRGB::CornflowerBlue;
+CRGB peakColor = CRGB::LightSlateGray;
+
+struct peakData {
+  int value;
+  long timestamp;
+};
+
+peakData peaks[32] = {0};
 
 void setup() {
   FastLED.addLeds<LED_TYPE, LED_PIN, COLOR_ORDER>(leds, NUM_LEDS).setCorrection(TypicalLEDStrip);
@@ -41,39 +51,59 @@ void setup() {
 }
 
 void loop() {
-  // val = analogRead(ANALOG);
-  // numLedsToLight = map(val, 0, 1023, 0, NUM_LEDS);
-
-  // uint8_t colorShift = beatsin8(10, 0, 255); // 10 bpm speed
-  // uint8_t hue = map(colorShift, 0, 255, HUE_RED, HUE_BLUE); // Shift Red to Blue
-
-  // // Pulse Brightness (Value)
-  // uint8_t brightness = beatsin8(20, 50, 255); // 20 bpm, min 50, max 255
-
-  // FastLED.clear();
-  // fill_solid(leds, numLedsToLight, CHSV(hue, 255, brightness));
-  // FastLED.show();
-
   unsigned long currentMillis = millis();
-  if (currentMillis - previousMillis > interval) {
 
-    std::vector<int> lights = getColumnArray(colToLight, 3);
-
+  if (currentMillis - prevFreqMillis > freqInterval) {
+    std::vector<int> lights;
     FastLED.clear();
-    for (int i = 0; i < lights.size(); i++) {
-      leds[lights[i]] = CRGB::Blue;
+
+    for(int i = 0; i < cols; i++) {
+      int height = beatsin8(60, 0, 8, i * 90);
+      heights[i] = height * random8(height) / height;
+      std::vector<int> colLights = getColumnArray(i, heights[i]);
+
+      for(int light : colLights) {
+        leds[light] = amplitudeColor;
+      }
     }
+
+    for(int i = 0; i < cols; i++) {
+      if(heights[i] >= peaks[i].value) {
+        peaks[i].value = heights[i];
+        peaks[i].timestamp = currentMillis + (peakInterval * peakHangTime);
+      }
+      leds[getLEDFromCoordinate(i, peaks[i].value)] = peakColor;
+    }
+
     FastLED.show();
-
-    sevseg.showNumber(colToLight);
-
-    colToLight++;
-    if (colToLight >= 32) {
-      colToLight = 0;
-    }
-
-    previousMillis = currentMillis;
+    prevFreqMillis = currentMillis;
   }
+
+  for(int i = 0; i < cols; i++) {
+    if(long(currentMillis) - peaks[i].timestamp > peakInterval) {
+      peaks[i].value--;
+      peaks[i].timestamp = currentMillis;
+
+      if(peaks[i].value < 0){
+        peaks[i].value = -1;
+      }
+    }
+  }
+}
+
+int getLEDFromCoordinate(int x, int y) {
+  int light = 0;
+  int xStart;
+
+  if (x % 2 == 1) {
+    xStart = x * 8;
+    light = xStart + y - 1;
+  } else {
+    xStart = x * 8 + 7;
+    light = xStart - y + 1;
+  }
+
+  return light;
 }
 
 // return array of leds to light for a column
