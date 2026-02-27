@@ -1,14 +1,28 @@
 #include <FastLED.h>
 #include <driver/i2s_std.h>
 #include <arduinoFFT.h>
+#include <Adafruit_GFX.h>    // Core graphics library
+#include <Adafruit_ST7789.h> // Hardware-specific library for ST7789
+
+// Pin definitions
+#define TFT_DC 9
+#define TFT_RST 10
+#define TFT_CS 11
+#define TFT_MOSI 12
+#define TFT_SCLK 13
+// Initialize with Software SPI
+Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RST);
+
 
 // Timing
-long intervalMultiplier = 5; // helps to slow things down if I want it
+long intervalMultiplier = 1; // helps to slow things down if I want it
+long waveInterval = 1 * intervalMultiplier;
 long prevWaveMillis = 0;
-long waveInterval = 48 * intervalMultiplier;
-long colInterval = waveInterval / 8;
+// long colInterval = waveInterval / 8;
+long colInterval = waveInterval;
 long prevColMillis = millis() + (colInterval * 2);
-long peakInterval = colInterval * 2;
+long peakInterval = colInterval * 32;
+int peakHangTime = 16;  // this is a multiplier
 // end Timing
 
 // Configuration
@@ -34,11 +48,12 @@ const int numRows = 8;
 peakData peaks[numCols] = {0};
 int waveHeights[numCols] = {0};
 int colHeights[numCols] = {0};
-int peakHangTime = 8;
 // CRGB amplitudeColor = CRGB::CornflowerBlue;
 // CRGB peakColor = CRGB::LightSlateGray;
-CRGB amplitudeColor = CRGB::Blue;
-CRGB peakColor = CRGB::Red;
+// CRGB amplitudeColor = CRGB::Red;
+// CRGB peakColor = CRGB::Blue;
+CRGB amplitudeColor = CRGB::DarkOrange;
+CRGB peakColor = CRGB::GreenYellow;
 // CRGB amplitudeColor = CRGB::PowderBlue;
 // CRGB peakColor = CRGB::PeachPuff;
 
@@ -53,8 +68,12 @@ std::vector<int> getColumnArray(int col, int height);
 i2s_chan_handle_t rx_handle;
 
 // fft stuff
-#define SAMPLES 64            // Must be a power of 2 to get 32 frequency bins
-#define SAMPLING_FREQ 16000   // 16kHz sampling rate
+#define SAMPLES 1024            // Must be a power of 2 to get 32 frequency bins
+#define SAMPLING_FREQ 44100
+#define BANDS 32
+double peak_hold = 1000000.0; // Initial guess for "loudest" sound
+// double peak_hold[BANDS]; // One for each band
+// double smoothed_display[BANDS];
 
 double vReal[SAMPLES]; // Real part of the input/output data
 double vImag[SAMPLES]; // Imaginary part of the input/output data (initialized to 0)
@@ -92,6 +111,23 @@ void setup() {
   // 3. Initialize and Enable
   i2s_channel_init_std_mode(rx_handle, &std_cfg);
   i2s_channel_enable(rx_handle);
+
+  // Use this for 1.3" or 1.54" 240x240 display:
+  // tft.init(80, 160);
+  // Use this for 2.0" 320x240 display:
+  // tft.init(240, 320); 
+
+  // tft.initR(INITR_MINI160x80);
+  tft.init(80, 160);           // Initialize with width and height
+  tft.setRotation(3);          // 1 or 3 for landscape; 0 or 2 for portrait
+  // tft.invertDisplay(true); 
+  tft.fillScreen(ST77XX_BLACK);
+  tft.setCursor(-80, -40);
+  tft.setTextColor(ST77XX_WHITE);
+  // tft.setTextSize(2);
+  tft.println("Hello World!");
+
+  tft.drawPixel(0, 0, 0xff9900);
 }
 
 /**
@@ -107,53 +143,69 @@ void loop() {
     //   waveHeights[i] = height * random8(height) / height; // addin some random variance
     // }
 
-    int32_t raw_buffer[SAMPLES];
+    int32_t raw_samples[SAMPLES];
     size_t bytes_read = 0;
+    double band_values[BANDS] = {0};
 
-    // Read I2S data using the new driver
-    if (i2s_channel_read(rx_handle, raw_buffer, sizeof(raw_buffer), &bytes_read, 1000) == ESP_OK) {
-        int samples_read = bytes_read / sizeof(int32_t);
-        for (int i = 0; i < samples_read; i++) {
-            vReal[i] = (double)(raw_buffer[i] >> 8); // Align 24-bit data if needed
+    if (i2s_channel_read(rx_handle, raw_samples, sizeof(raw_samples), &bytes_read, 1000) == ESP_OK) {
+        
+        // 1. Data Prep: Center the signal (Remove DC Bias)
+        int64_t sum = 0;
+        for (int i = 0; i < SAMPLES; i++) sum += raw_samples[i];
+        int32_t mean = sum / SAMPLES;
+
+        for (int i = 0; i < SAMPLES; i++) {
+            vReal[i] = (double)(raw_samples[i] - mean); // DC Removal
             vImag[i] = 0.0;
         }
 
+        // 2. FFT Execution
         FFT.windowing(FFT_WIN_TYP_HAMMING, FFT_FORWARD);
         FFT.compute(FFT_FORWARD);
         FFT.complexToMagnitude();
 
-        // Print the 32 bins
-        // for (int i = 0; i < (SAMPLES / 2); i++) {
-            // Serial.printf("Bin %d: %.2f\n", i, vReal[i]);
-        // }
+        // 3. Logarithmic Mapping to 32 Bands
+        double bin_step = pow((double)(SAMPLES/2) / 2.0, 1.0 / BANDS);
+        double current_bin = 2.0;
+        double frame_max = 0;
+
+        for (int i = 0; i < BANDS; i++) {
+            double next_bin = current_bin * bin_step;
+            double mag_avg = 0;
+            int count = 0;
+
+            for (int j = (int)current_bin; j < (int)next_bin && j < (SAMPLES/2); j++) {
+                mag_avg += vReal[j];
+                count++;
+            }
+            if (count > 0) mag_avg /= count;
+            
+            // Track max for Auto-Gain
+            if (mag_avg > frame_max) frame_max = mag_avg;
+
+            // 4. Scaling (The Fix for the "255" problem)
+            // Use a higher divisor or dynamic scaling
+            int display_val = (int)((mag_avg / peak_hold) * 255.0);
+            
+            // Constrain
+            if (display_val > 255) display_val = 255;
+            if (display_val < 0) display_val = 0;
+
+            Serial.print(display_val);
+            Serial.print(i == BANDS - 1 ? "" : " ");
+            current_bin = next_bin;
+
+            waveHeights[i] = map(display_val, 0, 255, 0, 7);
+        }
+        Serial.println();
+
+        // 5. Auto-Gain: Adjust peak_hold based on environment
+        if (frame_max > peak_hold) peak_hold = frame_max; // React to loud noise instantly
+        else peak_hold = (peak_hold * 0.98) + (frame_max * 0.02); // Slowly drift down
+        
+        // Prevent peak_hold from becoming too small (noise floor)
+        if (peak_hold < 500000.0) peak_hold = 500000.0; 
     }
-    // Serial.println("*****");
-
-    // Constants for mapping
-    const double MAX_RAW_VALUE = 8388607.0; // 24-bit max
-    const double NOISE_FLOOR = 500.0;       // Ignore values below this to avoid flickering
-
-    for (int i = 0; i < (SAMPLES / 2); i++) {
-        // 1. Normalize the FFT bin
-      double binVal = vReal[i] / (SAMPLES / 2);
-
-      // 2. Prevent log(0) errors with a tiny offset
-      if (binVal < 1.0) binVal = 1.0;
-
-      // 3. Logarithmic Scale: Result is roughly 0.0 to 6.92
-      double logValue = log10(binVal);
-
-      // 4. Map and Constrain to 0-7
-      // We multiply by SENSITIVITY to reach '7' before the mic actually clips
-      int displayValue = (int)(logValue * SENSITIVITY);
-      
-      // 5. Clean up noise floor and cap the max
-      if (logValue < NOISE_FLOOR) displayValue = 0;
-      displayValue = constrain(displayValue, 0, 7);
-
-      // Output for debugging
-      Serial.printf("Bin %d: %d\n", i, displayValue);
-      }
   }
 
   // DRAW COLUMNS
