@@ -4,7 +4,7 @@
 #include <Adafruit_GFX.h>    // Core graphics library
 #include <Adafruit_ST7789.h> // Hardware-specific library for ST7789
 
-// Pin definitions
+// TFT Pin definitions
 #define TFT_DC 9
 #define TFT_RST 10
 #define TFT_CS 11
@@ -15,17 +15,11 @@ Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RS
 
 
 // Timing
-long intervalMultiplier = 1; // helps to slow things down if I want it
-long waveInterval = 1 * intervalMultiplier;
-long prevWaveMillis = 0;
-// long colInterval = waveInterval / 8;
-long colInterval = waveInterval;
-long prevColMillis = millis() + (colInterval * 2);
-long peakInterval = colInterval * 32;
+long peakInterval = 32;
 int peakHangTime = 16;  // this is a multiplier
 // end Timing
 
-// Configuration
+// LED Configuration
 #define LED_PIN 4        // Pin connected to data line
 #define NUM_LEDS 256      // Number of LEDs in your strip
 #define BRIGHTNESS 6     // 0-255 (Keep low for testing)
@@ -122,7 +116,7 @@ void setup() {
   tft.setRotation(3);          // 1 or 3 for landscape; 0 or 2 for portrait
   // tft.invertDisplay(true); 
   tft.fillScreen(ST77XX_BLACK);
-  tft.setCursor(-80, -40);
+  tft.setCursor(0, 0);
   tft.setTextColor(ST77XX_WHITE);
   // tft.setTextSize(2);
   tft.println("Hello World!");
@@ -137,114 +131,110 @@ void loop() {
   unsigned long currentMillis = millis();
 
   // GENERATE WAVE DATA
-  if (currentMillis - prevWaveMillis > waveInterval) {
-    // for(int i = 0; i < numCols; i++) {
-    //   int height = beatsin8(64, 0, 8, i * 96);  // this generates the y value for each i-th column
-    //   waveHeights[i] = height * random8(height) / height; // addin some random variance
-    // }
+  // for(int i = 0; i < numCols; i++) {
+  //   int height = beatsin8(64, 0, 8, i * 96);  // this generates the y value for each i-th column
+  //   waveHeights[i] = height * random8(height) / height; // addin some random variance
+  // }
 
-    int32_t raw_samples[SAMPLES];
-    size_t bytes_read = 0;
-    double band_values[BANDS] = {0};
+  int32_t raw_samples[SAMPLES];
+  size_t bytes_read = 0;
+  double band_values[BANDS] = {0};
 
-    if (i2s_channel_read(rx_handle, raw_samples, sizeof(raw_samples), &bytes_read, 1000) == ESP_OK) {
-        
-        // 1. Data Prep: Center the signal (Remove DC Bias)
-        int64_t sum = 0;
-        for (int i = 0; i < SAMPLES; i++) sum += raw_samples[i];
-        int32_t mean = sum / SAMPLES;
+  if (i2s_channel_read(rx_handle, raw_samples, sizeof(raw_samples), &bytes_read, 1000) == ESP_OK) {
+      
+      // 1. Data Prep: Center the signal (Remove DC Bias)
+      int64_t sum = 0;
+      for (int i = 0; i < SAMPLES; i++) sum += raw_samples[i];
+      int32_t mean = sum / SAMPLES;
 
-        for (int i = 0; i < SAMPLES; i++) {
-            vReal[i] = (double)(raw_samples[i] - mean); // DC Removal
-            vImag[i] = 0.0;
-        }
+      for (int i = 0; i < SAMPLES; i++) {
+          vReal[i] = (double)(raw_samples[i] - mean); // DC Removal
+          vImag[i] = 0.0;
+      }
 
-        // 2. FFT Execution
-        FFT.windowing(FFT_WIN_TYP_HAMMING, FFT_FORWARD);
-        FFT.compute(FFT_FORWARD);
-        FFT.complexToMagnitude();
+      // 2. FFT Execution
+      FFT.windowing(FFT_WIN_TYP_HAMMING, FFT_FORWARD);
+      FFT.compute(FFT_FORWARD);
+      FFT.complexToMagnitude();
 
-        // 3. Logarithmic Mapping to 32 Bands
-        double bin_step = pow((double)(SAMPLES/2) / 2.0, 1.0 / BANDS);
-        double current_bin = 2.0;
-        double frame_max = 0;
+      // 3. Logarithmic Mapping to 32 Bands
+      double bin_step = pow((double)(SAMPLES/2) / 2.0, 1.0 / BANDS);
+      double current_bin = 2.0;
+      double frame_max = 0;
 
-        for (int i = 0; i < BANDS; i++) {
-            double next_bin = current_bin * bin_step;
-            double mag_avg = 0;
-            int count = 0;
+      for (int i = 0; i < BANDS; i++) {
+          double next_bin = current_bin * bin_step;
+          double mag_avg = 0;
+          int count = 0;
 
-            for (int j = (int)current_bin; j < (int)next_bin && j < (SAMPLES/2); j++) {
-                mag_avg += vReal[j];
-                count++;
-            }
-            if (count > 0) mag_avg /= count;
-            
-            // Track max for Auto-Gain
-            if (mag_avg > frame_max) frame_max = mag_avg;
+          for (int j = (int)current_bin; j < (int)next_bin && j < (SAMPLES/2); j++) {
+              mag_avg += vReal[j];
+              count++;
+          }
+          if (count > 0) mag_avg /= count;
+          
+          // Track max for Auto-Gain
+          if (mag_avg > frame_max) frame_max = mag_avg;
 
-            // 4. Scaling (The Fix for the "255" problem)
-            // Use a higher divisor or dynamic scaling
-            int display_val = (int)((mag_avg / peak_hold) * 255.0);
-            
-            // Constrain
-            if (display_val > 255) display_val = 255;
-            if (display_val < 0) display_val = 0;
+          // 4. Scaling (The Fix for the "255" problem)
+          // Use a higher divisor or dynamic scaling
+          int display_val = (int)((mag_avg / peak_hold) * 255.0);
+          
+          // Constrain
+          if (display_val > 255) display_val = 255;
+          if (display_val < 0) display_val = 0;
 
-            Serial.print(display_val);
-            Serial.print(i == BANDS - 1 ? "" : " ");
-            current_bin = next_bin;
+          Serial.print(display_val);
+          Serial.print(i == BANDS - 1 ? "" : " ");
+          current_bin = next_bin;
 
-            waveHeights[i] = map(display_val, 0, 255, 0, 7);
-        }
-        Serial.println();
+          waveHeights[i] = map(display_val, 0, 255, 0, 7);
+      }
+      Serial.println();
 
-        // 5. Auto-Gain: Adjust peak_hold based on environment
-        if (frame_max > peak_hold) peak_hold = frame_max; // React to loud noise instantly
-        else peak_hold = (peak_hold * 0.98) + (frame_max * 0.02); // Slowly drift down
-        
-        // Prevent peak_hold from becoming too small (noise floor)
-        if (peak_hold < 500000.0) peak_hold = 500000.0; 
-    }
+      // 5. Auto-Gain: Adjust peak_hold based on environment
+      if (frame_max > peak_hold) peak_hold = frame_max; // React to loud noise instantly
+      else peak_hold = (peak_hold * 0.98) + (frame_max * 0.02); // Slowly drift down
+      
+      // Prevent peak_hold from becoming too small (noise floor)
+      if (peak_hold < 500000.0) peak_hold = 500000.0; 
   }
 
   // DRAW COLUMNS
-  if (currentMillis - prevColMillis > colInterval) {
-    FastLED.clear();
+  FastLED.clear();
 
-    // set the height of the columns of light
-    for(int i = 0; i < numCols; i++) {
-      if(colHeights[i] > waveHeights[i]){
-        colHeights[i]--;
-      }
-
-      if(colHeights[i] < waveHeights[i]){
-        colHeights[i]++;
-      }
-
-      std::vector<int> colLEDs = getColumnArray(i, colHeights[i]); // get the id numbers for each led in the column
-
-      for(int light : colLEDs) {  // for each of those column leds, set their color
-        leds[light] = amplitudeColor;
-      }
+  // set the height of the columns of light
+  for(int i = 0; i < numCols; i++) {
+    if(colHeights[i] > waveHeights[i]){
+      colHeights[i]--;
     }
 
-    // set peak values
-    for(int i = 0; i < numCols; i++) {
-      if(colHeights[i] >= peaks[i].value){
-        // I would like for the peaks to completely disappear if the height has been zero for long enough
-        peaks[i].value = colHeights[i];
-        peaks[i].timestamp = currentMillis + (peakInterval * peakHangTime);
-      }
-      
-      if(peaks[i].value >= 0) {
-        leds[getLEDFromCoordinate(i, peaks[i].value)] = peakColor;
-      }
+    if(colHeights[i] < waveHeights[i]){
+      colHeights[i]++;
     }
 
-    FastLED.show();
-    prevColMillis = currentMillis;
+    std::vector<int> colLEDs = getColumnArray(i, colHeights[i]); // get the id numbers for each led in the column
+
+    for(int light : colLEDs) {  // for each of those column leds, set their color
+      leds[light] = amplitudeColor;
+    }
   }
+
+  // set peak values
+  for(int i = 0; i < numCols; i++) {
+    if(colHeights[i] >= peaks[i].value){
+      // I would like for the peaks to completely disappear if the height has been zero for long enough
+      peaks[i].value = colHeights[i];
+      peaks[i].timestamp = currentMillis + (peakInterval * peakHangTime);
+    }
+    
+    if(peaks[i].value >= 0) {
+      leds[getLEDFromCoordinate(i, peaks[i].value)] = peakColor;
+    }
+  }
+
+  fadeToBlackBy(leds, NUM_LEDS, 5);
+  FastLED.show();
 
   // PEAK DECAY
   for(int i = 0; i < numCols; i++) {
