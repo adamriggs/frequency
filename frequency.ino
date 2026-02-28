@@ -408,8 +408,13 @@ void renderWave() {
       leds[getLEDFromCoordinate(i, peaks[i].value)] = peakColor;
     }
 
-    peakLEDs[i] = leds[peaks[i].value];
+    peakLEDs[i] = leds[getLEDFromCoordinate(i, peaks[i].value)];
+
+    Serial.print(peaks[i].value);
+    Serial.print(" ");
   }
+
+  Serial.println();
 
   // show the LEDs
   fadeToBlackBy(leds, NUM_LEDS, fadeTime[fadeAmplitudeStyle]);
