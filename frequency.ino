@@ -4,7 +4,9 @@
 #include <Adafruit_GFX.h>    // Core graphics library
 #include <Adafruit_ST7789.h> // Hardware-specific library for ST7789
 
-// TFT Pin definitions
+/**
+*   TFT Display Configuration
+*/
 #define TFT_DC 9
 #define TFT_RST 10
 #define TFT_CS 11
@@ -14,12 +16,15 @@
 Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RST);
 
 
-// Timing
+/**
+*   Timing
+*/
 long peakInterval = 32;
-int peakHangTime = 16;  // this is a multiplier
-// end Timing
+int peakHangTime = 16;  // this is multiplied by peakInterval
 
-// LED Configuration
+/**
+*   LED Configuration
+*/
 #define LED_PIN 4        // Pin connected to data line
 #define NUM_LEDS 256      // Number of LEDs in your strip
 #define BRIGHTNESS 6     // 0-255 (Keep low for testing)
@@ -27,10 +32,11 @@ int peakHangTime = 16;  // this is a multiplier
 #define COLOR_ORDER GRB   // Typical color order for WS2812B
 #define ANALOG A0
 
-// Array to hold LED color data
 CRGB leds[NUM_LEDS];
 
-// display data
+/**
+*   LED Display Configuration
+*/
 struct peakData {
   int value;
   long timestamp;
@@ -53,7 +59,9 @@ CRGB peakColor = CRGB::GreenYellow;
 
 std::vector<int> getColumnArray(int col, int height);
 
-// i2s stuff
+/**
+*   i2s Configuration
+*/
 #define I2S_WS  7
 #define I2S_SD  5
 #define I2S_SCK 6
@@ -61,7 +69,9 @@ std::vector<int> getColumnArray(int col, int height);
 
 i2s_chan_handle_t rx_handle;
 
-// fft stuff
+/**
+*   FFT Configuration
+*/
 #define SAMPLES 1024            // Must be a power of 2 to get 32 frequency bins
 #define SAMPLING_FREQ 44100
 #define BANDS 32
@@ -78,20 +88,22 @@ ArduinoFFT<double> FFT = ArduinoFFT<double>(vReal, vImag, SAMPLES, SAMPLING_FREQ
 * Setup
 */
 void setup() {
+  // INIT FASTLED
   FastLED.addLeds<LED_TYPE, LED_PIN, COLOR_ORDER>(leds, NUM_LEDS).setCorrection(TypicalLEDStrip);
   FastLED.setBrightness(BRIGHTNESS);
 
+  // INIT ONBOARD LED
   neopixelWrite(RGB_BUILTIN, 0, 0, 5);
 
+  // INIT SERIAL COMMUNICATION
   Serial.begin(115200);
 
-  // 1. Configure the I2S channel
+  // INIT I2S
   i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
   i2s_new_channel(&chan_cfg, NULL, &rx_handle);
 
-  // 2. Configure the Standard Mode (Philips/MSB)
   i2s_std_config_t std_cfg = {
-    .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(SAMPLING_FREQ), // 16kHz Sample Rate
+    .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(SAMPLING_FREQ),
     .slot_cfg = I2S_STD_MSB_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_MONO),
     .gpio_cfg = {
       .mclk = I2S_GPIO_UNUSED,
@@ -102,26 +114,20 @@ void setup() {
     },
   };
 
-  // 3. Initialize and Enable
   i2s_channel_init_std_mode(rx_handle, &std_cfg);
   i2s_channel_enable(rx_handle);
 
-  // Use this for 1.3" or 1.54" 240x240 display:
-  // tft.init(80, 160);
-  // Use this for 2.0" 320x240 display:
-  // tft.init(240, 320); 
-
+  // INIT TFT
   // tft.initR(INITR_MINI160x80);
-  tft.init(80, 160);           // Initialize with width and height
-  tft.setRotation(3);          // 1 or 3 for landscape; 0 or 2 for portrait
-  // tft.invertDisplay(true); 
+  tft.init(80, 160);
+  tft.setRotation(3);
+  // tft.invertDisplay(true);
   tft.fillScreen(ST77XX_BLACK);
   tft.setCursor(0, 0);
   tft.setTextColor(ST77XX_WHITE);
   // tft.setTextSize(2);
   tft.println("Hello World!");
-
-  tft.drawPixel(0, 0, 0xff9900);
+  // tft.drawPixel(0, 0, 0xff9900);
 }
 
 /**
@@ -201,9 +207,8 @@ void loop() {
   }
 
   // DRAW COLUMNS
-  FastLED.clear();
 
-  // set the height of the columns of light
+  // Move the height of each column one step closer to the value of the wave
   for(int i = 0; i < numCols; i++) {
     if(colHeights[i] > waveHeights[i]){
       colHeights[i]--;
@@ -224,6 +229,7 @@ void loop() {
   for(int i = 0; i < numCols; i++) {
     if(colHeights[i] >= peaks[i].value){
       // I would like for the peaks to completely disappear if the height has been zero for long enough
+      // as it works now the peaks sit at the bottom and never turn off
       peaks[i].value = colHeights[i];
       peaks[i].timestamp = currentMillis + (peakInterval * peakHangTime);
     }
@@ -233,10 +239,11 @@ void loop() {
     }
   }
 
-  fadeToBlackBy(leds, NUM_LEDS, 5);
+  // show the LEDs
+  fadeToBlackBy(leds, NUM_LEDS, 75);
   FastLED.show();
 
-  // PEAK DECAY
+  // calculate peak decay
   for(int i = 0; i < numCols; i++) {
     if(long(currentMillis) - peaks[i].timestamp > peakInterval) {
       peaks[i].value--;
@@ -249,6 +256,8 @@ void loop() {
   }
 }
 
+// returns the ordinal position of the LED according to grid coordinate
+// 0, 0 is at the bottom left and not the top right, FYI
 int getLEDFromCoordinate(int x, int y) {
   int light = 0;
   int xStart;
@@ -264,7 +273,7 @@ int getLEDFromCoordinate(int x, int y) {
   return light;
 }
 
-// return array of leds to light for a column
+// return the numbers of the LEDs for a column given a height
 std::vector<int> getColumnArray(int col, int height) {
   std::vector<int> colLEDs;
   int colStart;
@@ -286,6 +295,7 @@ std::vector<int> getColumnArray(int col, int height) {
   return colLEDs;
 }
 
+// output vectors to the Serial port
 void printVector(const std::vector<int>& vec) {
   Serial.print("{ ");
   for (const auto& element : vec) {
