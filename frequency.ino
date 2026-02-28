@@ -71,9 +71,9 @@ i2s_chan_handle_t rx_handle;
 #define SAMPLES 1024            // Must be a power of 2 to get 32 frequency bins
 #define SAMPLING_FREQ 44100
 #define BANDS 32
-double peak_hold = 1000000.0; // Initial guess for "loudest" sound
-// double peak_hold[BANDS]; // One for each band
-// double smoothed_display[BANDS];
+// double peak_hold = 1000000.0; // Initial guess for "loudest" sound
+double peak_hold[BANDS]; // One for each band
+double smoothed_display[BANDS];
 
 double vReal[SAMPLES]; // Real part of the input/output data
 double vImag[SAMPLES]; // Imaginary part of the input/output data (initialized to 0)
@@ -167,7 +167,6 @@ void loop() {
         // 3. Logarithmic Mapping to 32 Bands
         double bin_step = pow((double)(SAMPLES/2) / 2.0, 1.0 / BANDS);
         double current_bin = 2.0;
-        double frame_max = 0;
 
         for (int i = 0; i < BANDS; i++) {
             double next_bin = current_bin * bin_step;
@@ -179,32 +178,42 @@ void loop() {
                 count++;
             }
             if (count > 0) mag_avg /= count;
-            
-            // Track max for Auto-Gain
-            if (mag_avg > frame_max) frame_max = mag_avg;
 
-            // 4. Scaling (The Fix for the "255" problem)
-            // Use a higher divisor or dynamic scaling
-            int display_val = (int)((mag_avg / peak_hold) * 255.0);
-            
-            // Constrain
-            if (display_val > 255) display_val = 255;
-            if (display_val < 0) display_val = 0;
+            // --- NEW: Frequency Weighting (Linear Boost) ---
+            // Boosts the high frequencies. Band 0 gets 1x, Band 31 gets ~4x.
+            mag_avg *= (1.0 + (i * 0.1)); 
 
-            Serial.print(display_val);
-            Serial.print(i == BANDS - 1 ? "" : " ");
+            // --- NEW: Per-Band Auto-Gain ---
+            if (mag_avg > peak_hold[i]) {
+                peak_hold[i] = mag_avg; // Catch peaks instantly
+            } else {
+                peak_hold[i] *= 0.95;    // Decay slowly
+            }
+
+            // Ensure we don't divide by zero or noise
+            if (peak_hold[i] < 100000.0) peak_hold[i] = 100000.0;
+
+            // Calculate display value (0-255)
+            double val = (mag_avg / peak_hold[i]) * 255.0;
+
+            // --- NEW: Temporal Smoothing (Dampens the "spikes") ---
+            smoothed_display[i] = (val * 0.2) + (smoothed_display[i] * 0.8);
+
+            Serial.print((int)smoothed_display[i]);
+            Serial.print(" ");
+
             current_bin = next_bin;
-
-            waveHeights[i] = map(display_val, 0, 255, 0, 7);
+            // waveHeights[i] = map(val, 0, 255, 0, 7);
+            waveHeights[i] = map(smoothed_display[i], 0, 255, 0, 7);
         }
         Serial.println();
 
         // 5. Auto-Gain: Adjust peak_hold based on environment
-        if (frame_max > peak_hold) peak_hold = frame_max; // React to loud noise instantly
-        else peak_hold = (peak_hold * 0.98) + (frame_max * 0.02); // Slowly drift down
+        // if (frame_max > peak_hold) peak_hold = frame_max; // React to loud noise instantly
+        // else peak_hold = (peak_hold * 0.98) + (frame_max * 0.02); // Slowly drift down
         
-        // Prevent peak_hold from becoming too small (noise floor)
-        if (peak_hold < 500000.0) peak_hold = 500000.0; 
+        // // Prevent peak_hold from becoming too small (noise floor)
+        // if (peak_hold < 500000.0) peak_hold = 500000.0; 
     }
   }
 
