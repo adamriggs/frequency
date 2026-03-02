@@ -47,7 +47,7 @@ int peakHangTime = 1024;  // the number of millis that it hangs at peak height b
 #define COLOR_ORDER GRB       // Typical color order for WS2812B
 
 CRGB leds[NUM_LEDS];
-int fadeTime[12] = {5, 10, 25, 50, 75, 100, 125, 150, 175, 200, 225, 255};
+int fadeTime[13] = {4, 5, 10, 25, 50, 75, 100, 125, 150, 175, 200, 225, 255};
 int fadeAmplitudeStyle = 0;
 int fadePeakStyle = 3;
 
