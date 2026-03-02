@@ -109,6 +109,8 @@ i2s_chan_handle_t rx_handle;
 *   FFT Configuration
 */
 #define SAMPLES 512
+// #define SAMPLES 256
+// #define SAMPLING_FREQ 22050
 #define SAMPLING_FREQ 44100
 #define BANDS 32
 double peak_hold = 1000000.0; // Initial guess for "loudest" sound: initial was 1000000.0
@@ -167,7 +169,7 @@ void setup() {
   tft.println("Hello World!");
   // tft.drawPixel(0, 0, 0xff9900);
 
-  // multi-core setup
+  // MULTI CORE
   //create a task that will be executed in the Task1code() function, with priority 1 and executed on core 0
   xTaskCreatePinnedToCore(
                     generateWave,   /* Task function. */
@@ -190,6 +192,8 @@ void loop() {
   // handleButton(0, digitalRead(BUTTON_0));
   handleButton(1, digitalRead(BUTTON_1));
   // handleButton(2, digitalRead(BUTTON_2));
+
+  // delay(1000);
 }
 
 // handle button presses
@@ -378,13 +382,16 @@ void logWave() {
 void renderWave() {
   // DRAW COLUMNS
   unsigned long currentMillis = millis();
+  amplitudeIDs.clear();
 
   // calculate peak height decay
   for(int i = 0; i < numCols; i++) {
     if(long(currentMillis) - peaks[i].timestamp > peakInterval) {
-      peakIDs.push_back(peaks[i].id);
       peaks[i].height--;
+      leds[peaks[i].id] = CRGB::Black;
+      peakIDs.push_back(peaks[i].id);
       peaks[i].id = getLEDFromCoordinate(i, peaks[i].height);
+      peakIDs.push_back(peaks[i].id);
       peaks[i].timestamp = currentMillis;
 
       if(peaks[i].height < 0) {
@@ -440,35 +447,48 @@ void renderWave() {
   it = std::unique(amplitudeIDs.begin(), amplitudeIDs.end());
   amplitudeIDs.erase(it, amplitudeIDs.end());
 
-  removeElements(peakIDs, amplitudeIDs);
-  // removeElements(amplitudeIDs, peakIDs);
+  removeElements(peakIDs, amplitudeIDs);    // this is the one that makes the fade heavier this is the one that should work
+                                            // it should remove anything from peakIDs that is in amplitudeIDs since the aIDs are never above the pIDs
+  // removeElements(amplitudeIDs, peakIDs); // this is the one that makes the fade lighter
 
   // Serial.print(amplitudeIDs.size());
   // Serial.print(" : ");
   // Serial.print(peakIDs.size());
+  // Serial.print(" : ");
+  // Serial.print(peakIDs.size() + amplitudeIDs.size());
   // Serial.println();
 
+  // Serial.print("A: ");
   // for(int i=0; i<amplitudeIDs.size(); i++) {
-  //   // Serial.print("A: ");
   //   // Serial.print(amplitudeIDs[i]);
   //   // Serial.print(" : ");
   //   leds[amplitudeIDs[i]].fadeToBlackBy(fadeTime[fadeAmplitudeStyle]);
   // }
   // Serial.println();
 
+  // Serial.print("P: ");
   // for(int i=0; i<peakIDs.size(); i++) {
-  //   // Serial.print("P: ");
   //   // Serial.print(peakIDs[i]);
   //   // Serial.print(" : ");
   //   leds[peakIDs[i]].fadeToBlackBy(fadeTime[fadePeakStyle]);
   // }
   // Serial.println();
 
+  // CRGB aIDs[amplitudeIDs.size()];
+  // for(int i = 0; i < amplitudeIDs.size(); i++) {
+  //   aIDs[i] = leds[amplitudeIDs[i]];
+  // }
+
+  // CRGB pIDs[peakIDs.size()];
+  // for(int i = 0; i < peakIDs.size(); i++) {
+  //   pIDs[i] = leds[peakIDs[i]];
+  // }
+
   // show the LEDs
   fadeToBlackBy(leds, NUM_LEDS, fadeTime[fadeAmplitudeStyle]);
   // fadeToBlackBy(leds, NUM_LEDS, fadeTime[fadePeakStyle]);
   // fadeToBlackBy(aIDs, amplitudeIDs.size(), fadeTime[fadeAmplitudeStyle]);
-  // fadeToBlackBy(peakLEDs, numCols, fadeTime[fadePeakStyle]);
+  // fadeToBlackBy(pIDs, peakIDs.size(), fadeTime[fadePeakStyle]);
   FastLED.show();
 
   // Serial.println("*****");
