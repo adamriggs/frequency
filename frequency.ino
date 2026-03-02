@@ -47,7 +47,7 @@ int peakHangTime = 1024;  // the number of millis that it hangs at peak height b
 #define COLOR_ORDER GRB       // Typical color order for WS2812B
 
 CRGB leds[NUM_LEDS];
-int fadeTime[11] = {10, 25, 50, 75, 100, 125, 150, 175, 200, 225, 255};
+int fadeTime[12] = {5, 10, 25, 50, 75, 100, 125, 150, 175, 200, 225, 255};
 int fadeAmplitudeStyle = 0;
 int fadePeakStyle = 3;
 
@@ -89,7 +89,7 @@ waveColors colors[7] = {
   {CRGB::DarkOrange, CRGB::GreenYellow},
   {CRGB::PowderBlue, CRGB::PeachPuff}
 };
-int currentColor = 0;
+int currentColor = 1;
 CRGB amplitudeColor = colors[currentColor].amplitudeColor;
 CRGB peakColor = colors[currentColor].peakColor;
 
@@ -119,6 +119,8 @@ double vReal[SAMPLES]; // Real part of the input/output data
 double vImag[SAMPLES]; // Imaginary part of the input/output data (initialized to 0)
 
 ArduinoFFT<double> FFT = ArduinoFFT<double>(vReal, vImag, SAMPLES, SAMPLING_FREQ);
+
+TaskHandle_t audioTask;
 
 /**
 * Setup
@@ -164,13 +166,25 @@ void setup() {
   // tft.setTextSize(2);
   tft.println("Hello World!");
   // tft.drawPixel(0, 0, 0xff9900);
+
+  // multi-core setup
+  //create a task that will be executed in the Task1code() function, with priority 1 and executed on core 0
+  xTaskCreatePinnedToCore(
+                    generateWave,   /* Task function. */
+                    "Audio",     /* name of task. */
+                    10000,       /* Stack size of task */
+                    NULL,        /* parameter of the task */
+                    1,           /* priority of the task */
+                    &audioTask,      /* Task handle to keep track of created task */
+                    0);          /* pin task to core 0 */                  
+  delay(500); 
 }
 
 /**
 * Loop
 */
 void loop() {
-  generateWave(waveType);
+  // generateWave();
   renderWave();
 
   // handleButton(0, digitalRead(BUTTON_0));
@@ -226,16 +240,12 @@ void handleButton(int button, bool state) {
   }
 }
 
-void generateWave(int wave) {
+void generateWave(void * pvParameters) {
   // GENERATE WAVE DATA]
-  if(wave == SINE_WAVE) {
-    sineWave();
-  } else if(wave == LOG_WAVE) {
+  while(1) {
+    // sineWave();
     logWave();
-  } else if(wave == NORMALIZED_WAVE) {
-    normalizedWave();
-  } else {
-    logWave();
+    vTaskDelay(pdMS_TO_TICKS(1));
   }
 }
 
@@ -365,78 +375,23 @@ void logWave() {
   }
 }
 
-void normalizedWave() {
-  int32_t raw_samples[SAMPLES];
-  size_t bytes_read = 0;
-  double band_values[BANDS] = {0};
-
-  if (i2s_channel_read(rx_handle, raw_samples, sizeof(raw_samples), &bytes_read, 1000) == ESP_OK) {
-      
-      // 1. Data Prep: Center the signal (Remove DC Bias)
-      int64_t sum = 0;
-      for (int i = 0; i < SAMPLES; i++) sum += raw_samples[i];
-      int32_t mean = sum / SAMPLES;
-
-      for (int i = 0; i < SAMPLES; i++) {
-          vReal[i] = (double)(raw_samples[i] - mean); // DC Removal
-          vImag[i] = 0.0;
-      }
-
-      // 2. FFT Execution
-      FFT.windowing(FFT_WIN_TYP_HAMMING, FFT_FORWARD);
-      FFT.compute(FFT_FORWARD);
-      FFT.complexToMagnitude();
-
-      // 3. Logarithmic Mapping to 32 Bands
-      double bin_step = pow((double)(SAMPLES/2) / 2.0, 1.0 / BANDS);
-      double current_bin = 2.0;
-
-      for (int i = 0; i < BANDS; i++) {
-          double next_bin = current_bin * bin_step;
-          double mag_avg = 0;
-          int count = 0;
-
-          for (int j = (int)current_bin; j < (int)next_bin && j < (SAMPLES/2); j++) {
-              mag_avg += vReal[j];
-              count++;
-          }
-          if (count > 0) mag_avg /= count;
-
-          // --- NEW: Frequency Weighting (Linear Boost) ---
-          // Boosts the high frequencies. Band 0 gets 1x, Band 31 gets ~4x.
-          mag_avg *= (1.0 + (i * 0.1)); 
-
-          // --- NEW: Per-Band Auto-Gain ---
-          if (mag_avg > peak_hold_arr[i]) {
-              peak_hold_arr[i] = mag_avg; // Catch peaks instantly
-          } else {
-              peak_hold_arr[i] *= 0.95;    // Decay slowly
-          }
-
-          // Ensure we don't divide by zero or noise
-          if (peak_hold_arr[i] < 100000.0) peak_hold_arr[i] = 100000.0;
-
-          // Calculate display value (0-255)
-          double val = (mag_avg / peak_hold_arr[i]) * 255.0;
-
-          // --- NEW: Temporal Smoothing (Dampens the "spikes") ---
-          smoothed_display[i] = (val * 0.2) + (smoothed_display[i] * 0.8);
-
-          // Serial.print((int)smoothed_display[i]);
-          // Serial.print(" ");
-
-          current_bin = next_bin;
-          // waveHeights[i] = map(val, 0, 255, 0, 7);
-          waveHeights[i] = map(smoothed_display[i], 0, 255, 0, 7);
-      }
-      // Serial.println();
-  }
-}
-
 void renderWave() {
   // DRAW COLUMNS
   unsigned long currentMillis = millis();
-  // FastLED.clear();
+
+  // calculate peak height decay
+  for(int i = 0; i < numCols; i++) {
+    if(long(currentMillis) - peaks[i].timestamp > peakInterval) {
+      peakIDs.push_back(peaks[i].id);
+      peaks[i].height--;
+      peaks[i].id = getLEDFromCoordinate(i, peaks[i].height);
+      peaks[i].timestamp = currentMillis;
+
+      if(peaks[i].height < 0) {
+        peaks[i].height = -1;
+      }
+    }
+  }
 
   // Move the height of each column one step closer to the height of the wave
   for(int i = 0; i < numCols; i++) {
@@ -472,10 +427,10 @@ void renderWave() {
     }
   }
 
-  Serial.print(amplitudeIDs.size());
-  Serial.print(" : ");
-  Serial.print(peakIDs.size());
-  Serial.println();
+  // Serial.print(amplitudeIDs.size());
+  // Serial.print(" : ");
+  // Serial.print(peakIDs.size());
+  // Serial.println();
 
   std::sort(peakIDs.begin(), peakIDs.end());
   auto it = std::unique(peakIDs.begin(), peakIDs.end());
@@ -488,40 +443,35 @@ void renderWave() {
   removeElements(peakIDs, amplitudeIDs);
   // removeElements(amplitudeIDs, peakIDs);
 
-  Serial.print(amplitudeIDs.size());
-  Serial.print(" : ");
-  Serial.print(peakIDs.size());
-  Serial.println();
+  // Serial.print(amplitudeIDs.size());
+  // Serial.print(" : ");
+  // Serial.print(peakIDs.size());
+  // Serial.println();
 
-  for(int i=0; i<amplitudeIDs.size(); i++) {
-    leds[amplitudeIDs[i]].fadeToBlackBy(fadeTime[fadeAmplitudeStyle]);
-  }
+  // for(int i=0; i<amplitudeIDs.size(); i++) {
+  //   // Serial.print("A: ");
+  //   // Serial.print(amplitudeIDs[i]);
+  //   // Serial.print(" : ");
+  //   leds[amplitudeIDs[i]].fadeToBlackBy(fadeTime[fadeAmplitudeStyle]);
+  // }
+  // Serial.println();
 
-  for(int i=0; i<peakIDs.size(); i++) {
-    leds[peakIDs[i]].fadeToBlackBy(fadeTime[fadePeakStyle]);
-  }
+  // for(int i=0; i<peakIDs.size(); i++) {
+  //   // Serial.print("P: ");
+  //   // Serial.print(peakIDs[i]);
+  //   // Serial.print(" : ");
+  //   leds[peakIDs[i]].fadeToBlackBy(fadeTime[fadePeakStyle]);
+  // }
+  // Serial.println();
 
   // show the LEDs
-  // fadeToBlackBy(leds, NUM_LEDS, fadeTime[fadeAmplitudeStyle]);
+  fadeToBlackBy(leds, NUM_LEDS, fadeTime[fadeAmplitudeStyle]);
   // fadeToBlackBy(leds, NUM_LEDS, fadeTime[fadePeakStyle]);
   // fadeToBlackBy(aIDs, amplitudeIDs.size(), fadeTime[fadeAmplitudeStyle]);
   // fadeToBlackBy(peakLEDs, numCols, fadeTime[fadePeakStyle]);
   FastLED.show();
 
-  // calculate peak decay
-  for(int i = 0; i < numCols; i++) {
-    if(long(currentMillis) - peaks[i].timestamp > peakInterval) {
-      peaks[i].height--;
-      // leds[peaks[i].id] = CRGB::Black;  // turn off old led
-      peaks[i].id = getLEDFromCoordinate(i, peaks[i].height);
-      peaks[i].timestamp = currentMillis;
-
-      if(peaks[i].height < 0){
-        peaks[i].height = -1;
-      }
-    }
-  }
-  Serial.println("*****");
+  // Serial.println("*****");
 }
 
 void removeElements(std::vector<int>& arr1, const std::vector<int>& arr2) {
