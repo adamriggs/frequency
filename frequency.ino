@@ -34,8 +34,8 @@ Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RS
 /**
 *   Timing
 */
-long peakInterval = 32; // the number of millis before a peak's height decrements
-int peakHangTime = 16;  // this is multiplied by peakInterval to get the total number of millis before decrementing
+long peakInterval = 64; // the number of millis in between height decrements after hanging
+int peakHangTime = 1024;  // the number of millis that it hangs at peak height before descending 
 
 /**
 *   LED Configuration
@@ -47,7 +47,7 @@ int peakHangTime = 16;  // this is multiplied by peakInterval to get the total n
 #define COLOR_ORDER GRB       // Typical color order for WS2812B
 
 CRGB leds[NUM_LEDS];
-int fadeTime[10] = {25, 50, 75, 100, 125, 150, 175, 200, 225, 255};
+int fadeTime[11] = {10, 25, 50, 75, 100, 125, 150, 175, 200, 225, 255};
 int fadeAmplitudeStyle = 0;
 int fadePeakStyle = 3;
 
@@ -55,8 +55,9 @@ int fadePeakStyle = 3;
 *   LED Display Configuration
 */
 struct peakData {
-  int value;
+  int height;
   long timestamp;
+  int id;
 };
 
 struct waveColors {
@@ -72,18 +73,23 @@ const int NORMALIZED_WAVE = 2;
 const int NUM_WAVES = 3;
 int waveType = LOG_WAVE;
 
-CRGB peakLEDs[32];
+// CRGB peakLEDs[32];
+std::vector<int> peakIDs;
+std::vector<int> amplitudeIDs;
 peakData peaks[numCols] = {0};
 int waveHeights[numCols] = {0};
 int colHeights[numCols] = {0};
 
-waveColors colors[4] = {
+waveColors colors[7] = {
   {CRGB::CornflowerBlue, CRGB::LightSlateGray},
+  {CRGB::CornflowerBlue, CRGB::Chocolate},
+  {CRGB::CornflowerBlue, CRGB::DarkGrey},
+  {CRGB::CornflowerBlue, CRGB::GhostWhite},
   {CRGB::Red, CRGB::Blue},
   {CRGB::DarkOrange, CRGB::GreenYellow},
   {CRGB::PowderBlue, CRGB::PeachPuff}
 };
-int currentColor = 2;
+int currentColor = 0;
 CRGB amplitudeColor = colors[currentColor].amplitudeColor;
 CRGB peakColor = colors[currentColor].peakColor;
 
@@ -102,10 +108,10 @@ i2s_chan_handle_t rx_handle;
 /**
 *   FFT Configuration
 */
-#define SAMPLES 1024
+#define SAMPLES 512
 #define SAMPLING_FREQ 44100
 #define BANDS 32
-double peak_hold = 1000000.0; // Initial guess for "loudest" sound
+double peak_hold = 1000000.0; // Initial guess for "loudest" sound: initial was 1000000.0
 double peak_hold_arr[BANDS]; // One for each band
 double smoothed_display[BANDS];
 
@@ -167,9 +173,9 @@ void loop() {
   generateWave(waveType);
   renderWave();
 
-  handleButton(0, digitalRead(BUTTON_0));
+  // handleButton(0, digitalRead(BUTTON_0));
   handleButton(1, digitalRead(BUTTON_1));
-  handleButton(2, digitalRead(BUTTON_2));
+  // handleButton(2, digitalRead(BUTTON_2));
 }
 
 // handle button presses
@@ -201,10 +207,10 @@ void handleButton(int button, bool state) {
       if(button == 2) {
         neopixelWrite(RGB_BUILTIN, 0, 0, 5);
 
-        // fadeAmplitudeStyle++;
-        // if(fadeAmplitudeStyle >= 10) {
-        //   fadeAmplitudeStyle = 0;
-        // }
+        fadeAmplitudeStyle++;
+        if(fadeAmplitudeStyle >= 10) {
+          fadeAmplitudeStyle = 0;
+        }
         // fadeAmplitudeStyle = 3;
         Serial.print("Fade Number: ");
         Serial.print(fadeAmplitudeStyle);
@@ -248,6 +254,8 @@ void logWave() {
   if (i2s_channel_read(rx_handle, raw_samples, sizeof(raw_samples), &bytes_read, 1000) == ESP_OK) {
       
       // 1. Data Prep: Center the signal (Remove DC Bias)
+      // there is a hum that the DC current puts into the signal
+      // this can be removed by subtracting the average of the signals from each sample
       int64_t sum = 0;
       for (int i = 0; i < SAMPLES; i++) sum += raw_samples[i];
       int32_t mean = sum / SAMPLES;
@@ -258,25 +266,76 @@ void logWave() {
       }
 
       // 2. FFT Execution
+      // the FFT object is instantiated with the arrays so that's why they aren't passed in here
       FFT.windowing(FFT_WIN_TYP_HAMMING, FFT_FORWARD);
       FFT.compute(FFT_FORWARD);
       FFT.complexToMagnitude();
 
       // 3. Logarithmic Mapping to 32 Bands
-      double bin_step = pow((double)(SAMPLES/2) / 2.0, 1.0 / BANDS);
+      // this is where we run into problems
+      double bin_step = pow((double)(SAMPLES/2) / 2.0, 1.0 / BANDS);  // bin_step=1.19 for 1024 SAMPLES
       double current_bin = 2.0;
       double frame_max = 0;
+
+      // 0-1,i=0: current_bin=2.00 and next_bin=2.38 and int(2.0) < int(2.38) evaluates to 2<2 which is false and nothing gets counted this round
+      // 1-2,i=1: current_bin=2.38 and next_bin=2.83 and 2!<2 : no counting
+      // 2-3,i=2: current_bin=2.83 and next_bin=3.36 and 2<3 : counting
+      // 3-4,1=3: current_bin=3.36 and next_bin=3.99 and 3!<3 : no counting
+      // 4-5,i=4: current_bin=3.99 and next_bin=4.74 and 3<4 : counting
+      // 5-6,i=5: current_bin=4.74 and next_bin=5.64 and 4<5 : counting
+      // 6-7,i=6: current_bin=5.64 and next_bin=6.71 and 5<6 : counting
+      // 7-8,i=7: cuttent_bin=6.71 and next_bin=7.98 and 6<7 : counting
+      // 8-9,i=8: cuttent_bin=7.98 and next_bin=9.49 and 7<9 : counting
 
       for (int i = 0; i < BANDS; i++) {
           double next_bin = current_bin * bin_step;
           double mag_avg = 0;
+          double mag_max = 0;
           int count = 0;
 
-          for (int j = (int)current_bin; j < (int)next_bin && j < (SAMPLES/2); j++) {
+          int tmp_current_bin = 0;
+          int tmp_next_bin = 1;
+
+          if(i==0) {
+            tmp_current_bin = 0;
+            tmp_next_bin = 1;
+          } else if (i==1) {
+            tmp_current_bin = 1;
+            tmp_next_bin = 2;
+          } else if (i==2) {
+            tmp_current_bin = 2;
+            tmp_next_bin = 3;
+          } else if (i==3) {
+            tmp_current_bin = 3;
+            tmp_next_bin = 4;
+          } else if (i==4) {
+            tmp_current_bin = 4;
+            tmp_next_bin = 5;
+          } else if (i==5) {
+            tmp_current_bin = 5;
+            tmp_next_bin = 6;
+          } else if (i==6) {
+            tmp_current_bin = 6;
+            tmp_next_bin = 7;
+          } else if (i==7) {
+            tmp_current_bin = 7;
+            tmp_next_bin = 8;
+          } else if (i==8) {
+            tmp_current_bin = 8;
+            tmp_next_bin = 9;
+          } else {
+            tmp_current_bin = current_bin;
+            tmp_next_bin = next_bin;
+          }
+
+          for (int j = (int)tmp_current_bin; j < (int)tmp_next_bin && j < (SAMPLES/2); j++) {
               mag_avg += vReal[j];
+              if(vReal[j]>mag_max) mag_max = vReal[j];
               count++;
           }
           if (count > 0) mag_avg /= count;
+
+          mag_avg = mag_max;  // set to max instead of average to make it more active
           
           // Track max for Auto-Gain
           if (mag_avg > frame_max) frame_max = mag_avg;
@@ -377,61 +436,107 @@ void normalizedWave() {
 void renderWave() {
   // DRAW COLUMNS
   unsigned long currentMillis = millis();
+  // FastLED.clear();
 
-  // Move the height of each column one step closer to the value of the wave
+  // Move the height of each column one step closer to the height of the wave
   for(int i = 0; i < numCols; i++) {
-    if(colHeights[i] > waveHeights[i]){
+    if(colHeights[i] > waveHeights[i]) {
       colHeights[i]--;
     }
 
-    if(colHeights[i] < waveHeights[i]){
+    if(colHeights[i] < waveHeights[i]) {
       colHeights[i]++;
     }
 
-    std::vector<int> colLEDs = getColumnArray(i, colHeights[i]); // get the id numbers for each led in the column
+    std::vector<int> colLEDs = getColumnArray(i, colHeights[i]); // get the id numbers for each led that should be lit in the column
 
     for(int light : colLEDs) {  // for each of those column leds, set their color
       leds[light] = amplitudeColor;
+      amplitudeIDs.push_back(light);
     }
   }
 
   // set peak values
   for(int i = 0; i < numCols; i++) {
-    if(colHeights[i] >= peaks[i].value){
+    if(colHeights[i] >= peaks[i].height) {
       // I would like for the peaks to completely disappear if the height has been zero for long enough
       // as it works now the peaks sit at the bottom and never turn off
-      peaks[i].value = colHeights[i];
-      peaks[i].timestamp = currentMillis + (peakInterval * peakHangTime);
+      peaks[i].height = colHeights[i];
+      peaks[i].timestamp = currentMillis + peakHangTime;
+      peaks[i].id = getLEDFromCoordinate(i, peaks[i].height);
     }
     
-    if(peaks[i].value >= 0) {
-      leds[getLEDFromCoordinate(i, peaks[i].value)] = peakColor;
+    if(peaks[i].height >= 0) {
+      leds[peaks[i].id] = peakColor;
+      peakIDs.push_back(peaks[i].id);
     }
-
-    peakLEDs[i] = leds[getLEDFromCoordinate(i, peaks[i].value)];
-
-    Serial.print(peaks[i].value);
-    Serial.print(" ");
   }
 
+  Serial.print(amplitudeIDs.size());
+  Serial.print(" : ");
+  Serial.print(peakIDs.size());
   Serial.println();
 
+  std::sort(peakIDs.begin(), peakIDs.end());
+  auto it = std::unique(peakIDs.begin(), peakIDs.end());
+  peakIDs.erase(it, peakIDs.end());
+
+  std::sort(amplitudeIDs.begin(), amplitudeIDs.end());
+  it = std::unique(amplitudeIDs.begin(), amplitudeIDs.end());
+  amplitudeIDs.erase(it, amplitudeIDs.end());
+
+  removeElements(peakIDs, amplitudeIDs);
+  // removeElements(amplitudeIDs, peakIDs);
+
+  Serial.print(amplitudeIDs.size());
+  Serial.print(" : ");
+  Serial.print(peakIDs.size());
+  Serial.println();
+
+  for(int i=0; i<amplitudeIDs.size(); i++) {
+    leds[amplitudeIDs[i]].fadeToBlackBy(fadeTime[fadeAmplitudeStyle]);
+  }
+
+  for(int i=0; i<peakIDs.size(); i++) {
+    leds[peakIDs[i]].fadeToBlackBy(fadeTime[fadePeakStyle]);
+  }
+
   // show the LEDs
-  fadeToBlackBy(leds, NUM_LEDS, fadeTime[fadeAmplitudeStyle]);
-  fadeToBlackBy(peakLEDs, NUM_LEDS, fadeTime[fadePeakStyle]);
+  // fadeToBlackBy(leds, NUM_LEDS, fadeTime[fadeAmplitudeStyle]);
+  // fadeToBlackBy(leds, NUM_LEDS, fadeTime[fadePeakStyle]);
+  // fadeToBlackBy(aIDs, amplitudeIDs.size(), fadeTime[fadeAmplitudeStyle]);
+  // fadeToBlackBy(peakLEDs, numCols, fadeTime[fadePeakStyle]);
   FastLED.show();
 
   // calculate peak decay
   for(int i = 0; i < numCols; i++) {
     if(long(currentMillis) - peaks[i].timestamp > peakInterval) {
-      peaks[i].value--;
+      peaks[i].height--;
+      // leds[peaks[i].id] = CRGB::Black;  // turn off old led
+      peaks[i].id = getLEDFromCoordinate(i, peaks[i].height);
       peaks[i].timestamp = currentMillis;
 
-      if(peaks[i].value < 0){
-        peaks[i].value = -1;
+      if(peaks[i].height < 0){
+        peaks[i].height = -1;
       }
     }
   }
+  Serial.println("*****");
+}
+
+void removeElements(std::vector<int>& arr1, const std::vector<int>& arr2) {
+    int i = 0, j = 0;
+    while (i < arr1.size() && j < arr2.size()) {
+        if (arr1[i] == arr2[j]) {
+            arr1.erase(arr1.begin() + i);
+            // Do not increment i, as the next element shifted left
+            // j can be incremented if arr2 has unique elements
+        } else if (arr1[i] < arr2[j]) {
+            i++;
+        } else {
+            j++;
+        }
+    }
 }
 
 // returns the ordinal position of the LED according to grid coordinate
