@@ -69,11 +69,8 @@ const int numCols = 32;
 const int numRows = 8;
 const int SINE_WAVE = 0;
 const int LOG_WAVE = 1;
-const int NORMALIZED_WAVE = 2;
-const int NUM_WAVES = 3;
 int waveType = LOG_WAVE;
 
-// CRGB peakLEDs[32];
 std::vector<int> peakIDs;
 std::vector<int> amplitudeIDs;
 peakData peaks[numCols] = {0};
@@ -81,15 +78,15 @@ int waveHeights[numCols] = {0};
 int colHeights[numCols] = {0};
 
 waveColors colors[7] = {
-  {CRGB::CornflowerBlue, CRGB::LightSlateGray},
-  {CRGB::CornflowerBlue, CRGB::Chocolate},
-  {CRGB::CornflowerBlue, CRGB::DarkGrey},
-  {CRGB::CornflowerBlue, CRGB::GhostWhite},
-  {CRGB::Red, CRGB::Blue},
+  {CRGB::CornflowerBlue, CRGB::DarkOrange},
+  {CRGB::CadetBlue, CRGB::DarkOrange},
   {CRGB::DarkOrange, CRGB::GreenYellow},
-  {CRGB::PowderBlue, CRGB::PeachPuff}
+  {CRGB::PapayaWhip, CRGB::Plaid},
+  {CRGB::GreenYellow, CRGB::Lime},
+  {CRGB::Peru, CRGB::SkyBlue},
+  {CRGB::RoyalBlue, CRGB::PowderBlue}
 };
-int currentColor = 1;
+int currentColor = 0;
 CRGB amplitudeColor = colors[currentColor].amplitudeColor;
 CRGB peakColor = colors[currentColor].peakColor;
 
@@ -108,10 +105,11 @@ i2s_chan_handle_t rx_handle;
 /**
 *   FFT Configuration
 */
-#define SAMPLES 512
-// #define SAMPLES 256
-// #define SAMPLING_FREQ 22050
-#define SAMPLING_FREQ 44100
+
+#define SAMPLES 256
+#define SAMPLING_FREQ 22050
+// #define SAMPLES 512
+// #define SAMPLING_FREQ 44100
 #define BANDS 32
 double peak_hold = 1000000.0; // Initial guess for "loudest" sound: initial was 1000000.0
 double peak_hold_arr[BANDS]; // One for each band
@@ -122,7 +120,15 @@ double vImag[SAMPLES]; // Imaginary part of the input/output data (initialized t
 
 ArduinoFFT<double> FFT = ArduinoFFT<double>(vReal, vImag, SAMPLES, SAMPLING_FREQ);
 
+/**
+*   Multi Core 
+*/
 TaskHandle_t audioTask;
+
+
+// buttons
+bool crispPeak = true;
+bool instant = false;
 
 /**
 * Setup
@@ -170,15 +176,15 @@ void setup() {
   // tft.drawPixel(0, 0, 0xff9900);
 
   // MULTI CORE
-  //create a task that will be executed in the Task1code() function, with priority 1 and executed on core 0
   xTaskCreatePinnedToCore(
-                    generateWave,   /* Task function. */
-                    "Audio",     /* name of task. */
-                    10000,       /* Stack size of task */
-                    NULL,        /* parameter of the task */
-                    1,           /* priority of the task */
-                    &audioTask,      /* Task handle to keep track of created task */
-                    0);          /* pin task to core 0 */                  
+    generateWave, /* Task function. */
+    "Audio",      /* name of task. */
+    10000,        /* Stack size of task */
+    NULL,         /* parameter of the task */
+    1,            /* priority of the task */
+    &audioTask,   /* Task handle to keep track of created task */
+    0             /* pin task to core 0 */
+  );              
   delay(500); 
 }
 
@@ -186,14 +192,11 @@ void setup() {
 * Loop
 */
 void loop() {
-  // generateWave();
   renderWave();
 
-  // handleButton(0, digitalRead(BUTTON_0));
+  handleButton(0, digitalRead(BUTTON_0));
   handleButton(1, digitalRead(BUTTON_1));
-  // handleButton(2, digitalRead(BUTTON_2));
-
-  // delay(1000);
+  handleButton(2, digitalRead(BUTTON_2));
 }
 
 // handle button presses
@@ -205,10 +208,13 @@ void handleButton(int button, bool state) {
       if(button == 0) {
         neopixelWrite(RGB_BUILTIN, 5, 0, 0);
 
-        waveType++;
-        if(waveType >= NUM_WAVES) {
-          waveType = 0;
+        if(instant == true) {
+          instant = false;
+        } else {
+          instant = true;
         }
+        Serial.println(instant);
+
       }
 
       if(button == 1) {
@@ -224,16 +230,11 @@ void handleButton(int button, bool state) {
 
       if(button == 2) {
         neopixelWrite(RGB_BUILTIN, 0, 0, 5);
-
-        fadeAmplitudeStyle++;
-        if(fadeAmplitudeStyle >= 10) {
-          fadeAmplitudeStyle = 0;
+        if(crispPeak == true) {
+          crispPeak = false;
+        } else {
+          crispPeak = true;
         }
-        // fadeAmplitudeStyle = 3;
-        Serial.print("Fade Number: ");
-        Serial.print(fadeAmplitudeStyle);
-        Serial.print(" : ");
-        Serial.println(fadeTime[fadeAmplitudeStyle]);
       }
     }
   }
@@ -388,33 +389,32 @@ void renderWave() {
   for(int i = 0; i < numCols; i++) {
     if(long(currentMillis) - peaks[i].timestamp > peakInterval) {
       peaks[i].height--;
-      leds[peaks[i].id] = CRGB::Black;
-      peakIDs.push_back(peaks[i].id);
-      peaks[i].id = getLEDFromCoordinate(i, peaks[i].height);
-      peakIDs.push_back(peaks[i].id);
-      peaks[i].timestamp = currentMillis;
-
-      if(peaks[i].height < 0) {
-        peaks[i].height = -1;
+      if(crispPeak) {
+        leds[peaks[i].id] = CRGB::Black;
       }
+      peaks[i].id = getLEDFromCoordinate(i, peaks[i].height);
+      peaks[i].timestamp = currentMillis;
     }
   }
 
   // Move the height of each column one step closer to the height of the wave
   for(int i = 0; i < numCols; i++) {
-    if(colHeights[i] > waveHeights[i]) {
-      colHeights[i]--;
-    }
+    if(instant==true) {
+      colHeights[i] = waveHeights[i];
+    } else {
+      if(colHeights[i] > waveHeights[i]) {
+        colHeights[i]--;
+      }
 
-    if(colHeights[i] < waveHeights[i]) {
-      colHeights[i]++;
+      if(colHeights[i] < waveHeights[i]) {
+        colHeights[i]++;
+      }
     }
 
     std::vector<int> colLEDs = getColumnArray(i, colHeights[i]); // get the id numbers for each led that should be lit in the column
 
     for(int light : colLEDs) {  // for each of those column leds, set their color
       leds[light] = amplitudeColor;
-      amplitudeIDs.push_back(light);
     }
   }
 
@@ -430,65 +430,12 @@ void renderWave() {
     
     if(peaks[i].height >= 0) {
       leds[peaks[i].id] = peakColor;
-      peakIDs.push_back(peaks[i].id);
+      // peakIDs.push_back(peaks[i].id);
     }
   }
 
-  // Serial.print(amplitudeIDs.size());
-  // Serial.print(" : ");
-  // Serial.print(peakIDs.size());
-  // Serial.println();
-
-  std::sort(peakIDs.begin(), peakIDs.end());
-  auto it = std::unique(peakIDs.begin(), peakIDs.end());
-  peakIDs.erase(it, peakIDs.end());
-
-  std::sort(amplitudeIDs.begin(), amplitudeIDs.end());
-  it = std::unique(amplitudeIDs.begin(), amplitudeIDs.end());
-  amplitudeIDs.erase(it, amplitudeIDs.end());
-
-  removeElements(peakIDs, amplitudeIDs);    // this is the one that makes the fade heavier this is the one that should work
-                                            // it should remove anything from peakIDs that is in amplitudeIDs since the aIDs are never above the pIDs
-  // removeElements(amplitudeIDs, peakIDs); // this is the one that makes the fade lighter
-
-  // Serial.print(amplitudeIDs.size());
-  // Serial.print(" : ");
-  // Serial.print(peakIDs.size());
-  // Serial.print(" : ");
-  // Serial.print(peakIDs.size() + amplitudeIDs.size());
-  // Serial.println();
-
-  // Serial.print("A: ");
-  // for(int i=0; i<amplitudeIDs.size(); i++) {
-  //   // Serial.print(amplitudeIDs[i]);
-  //   // Serial.print(" : ");
-  //   leds[amplitudeIDs[i]].fadeToBlackBy(fadeTime[fadeAmplitudeStyle]);
-  // }
-  // Serial.println();
-
-  // Serial.print("P: ");
-  // for(int i=0; i<peakIDs.size(); i++) {
-  //   // Serial.print(peakIDs[i]);
-  //   // Serial.print(" : ");
-  //   leds[peakIDs[i]].fadeToBlackBy(fadeTime[fadePeakStyle]);
-  // }
-  // Serial.println();
-
-  // CRGB aIDs[amplitudeIDs.size()];
-  // for(int i = 0; i < amplitudeIDs.size(); i++) {
-  //   aIDs[i] = leds[amplitudeIDs[i]];
-  // }
-
-  // CRGB pIDs[peakIDs.size()];
-  // for(int i = 0; i < peakIDs.size(); i++) {
-  //   pIDs[i] = leds[peakIDs[i]];
-  // }
-
   // show the LEDs
   fadeToBlackBy(leds, NUM_LEDS, fadeTime[fadeAmplitudeStyle]);
-  // fadeToBlackBy(leds, NUM_LEDS, fadeTime[fadePeakStyle]);
-  // fadeToBlackBy(aIDs, amplitudeIDs.size(), fadeTime[fadeAmplitudeStyle]);
-  // fadeToBlackBy(pIDs, peakIDs.size(), fadeTime[fadePeakStyle]);
   FastLED.show();
 
   // Serial.println("*****");
