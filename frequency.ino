@@ -19,6 +19,9 @@ buttonStates buttons[3] = {0};
 unsigned long prevButtonMillis = 0;
 unsigned long buttonInterval = 50;
 
+bool crispPeak = true;
+bool instant = true;
+
 /**
 *   TFT Display Configuration
 */
@@ -34,11 +37,11 @@ Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RS
 /**
 *   Timing
 */
-long peakInterval = 64; // the number of millis in between height decrements after hanging
 int peakHangTime = 1024;  // the number of millis that it hangs at peak height before descending 
+long peakInterval = 64; // the number of millis in between height decrements after hanging
 
 /**
-*   LED Configuration
+*   LED Matrix Configuration
 */
 #define LED_PIN     4         // Pin connected to data line
 #define NUM_LEDS    256       // Number of LEDs in your strip
@@ -51,9 +54,6 @@ int fadeTime[13] = {4, 5, 10, 25, 50, 75, 100, 125, 150, 175, 200, 225, 255};
 int fadeAmplitudeStyle = 0;
 int fadePeakStyle = 3;
 
-/**
-*   LED Display Configuration
-*/
 struct peakData {
   int height;
   long timestamp;
@@ -90,7 +90,7 @@ int currentColor = 0;
 CRGB amplitudeColor = colors[currentColor].amplitudeColor;
 CRGB peakColor = colors[currentColor].peakColor;
 
-std::vector<int> getColumnArray(int col, int height);
+std::vector<int> getColumnArray(int col, int height); // function signature 
 
 /**
 *   i2s Configuration
@@ -112,7 +112,7 @@ i2s_chan_handle_t rx_handle;
 // #define SAMPLING_FREQ 44100
 #define BANDS 32
 double peak_hold = 1000000.0; // Initial guess for "loudest" sound: initial was 1000000.0
-double peak_hold_arr[BANDS]; // One for each band
+double peak_hold_arr[BANDS];  // One for each band
 double smoothed_display[BANDS];
 
 double vReal[SAMPLES]; // Real part of the input/output data
@@ -124,11 +124,6 @@ ArduinoFFT<double> FFT = ArduinoFFT<double>(vReal, vImag, SAMPLES, SAMPLING_FREQ
 *   Multi Core 
 */
 TaskHandle_t audioTask;
-
-
-// buttons
-bool crispPeak = true;
-bool instant = false;
 
 /**
 * Setup
@@ -175,7 +170,7 @@ void setup() {
   tft.println("Hello World!");
   // tft.drawPixel(0, 0, 0xff9900);
 
-  // MULTI CORE
+  // INIT MULTI CORE
   xTaskCreatePinnedToCore(
     generateWave, /* Task function. */
     "Audio",      /* name of task. */
@@ -194,7 +189,7 @@ void setup() {
 void loop() {
   renderWave();
 
-  handleButton(0, digitalRead(BUTTON_0));
+  // handleButton(0, digitalRead(BUTTON_0));    // this one keeps accidentally triggering
   handleButton(1, digitalRead(BUTTON_1));
   handleButton(2, digitalRead(BUTTON_2));
 }
@@ -206,19 +201,17 @@ void handleButton(int button, bool state) {
   if ((millis() - prevButtonMillis) > buttonInterval) {
     if(buttons[button].state == 1 && buttons[button].stateOld == 0) {
       if(button == 0) {
-        neopixelWrite(RGB_BUILTIN, 5, 0, 0);
+        neopixelWrite(RGB_BUILTIN, 5, 0, 0);  // indicator so I know the button press was registered
 
         if(instant == true) {
           instant = false;
         } else {
           instant = true;
         }
-        Serial.println(instant);
-
       }
 
       if(button == 1) {
-        neopixelWrite(RGB_BUILTIN, 0, 5, 0);
+        neopixelWrite(RGB_BUILTIN, 0, 5, 0);  // indicator so I know the button press was registered
 
         currentColor++;
         if(currentColor >= sizeof(colors) / sizeof(colors[0])) {
@@ -229,7 +222,7 @@ void handleButton(int button, bool state) {
       }
 
       if(button == 2) {
-        neopixelWrite(RGB_BUILTIN, 0, 0, 5);
+        neopixelWrite(RGB_BUILTIN, 0, 0, 5);  // indicator so I know the button press was registered
         if(crispPeak == true) {
           crispPeak = false;
         } else {
@@ -246,22 +239,22 @@ void handleButton(int button, bool state) {
 }
 
 void generateWave(void * pvParameters) {
-  // GENERATE WAVE DATA]
-  while(1) {
+  // GENERATE WAVE DATA
+  while(1) {  // infinite loop because this function is getting offloaded to the second core where it will run continuously
     // sineWave();
     logWave();
     vTaskDelay(pdMS_TO_TICKS(1));
   }
 }
 
-void sineWave() {
+void sineWave() {   // used for testing the led rendering code before my microphone came in
   for(int i = 0; i < numCols; i++) {
     int height = beatsin8(64, 0, 8, i * 96);  // this generates the y value for each i-th column
     waveHeights[i] = height * random8(height) / height; // add in some random variance
   }
 }
 
-void logWave() {
+void logWave() {  // the main audio processing function that is offloaded to the second core
   int32_t raw_samples[SAMPLES];
   size_t bytes_read = 0;
   double band_values[BANDS] = {0};
@@ -292,6 +285,7 @@ void logWave() {
       double current_bin = 2.0;
       double frame_max = 0;
 
+      // this math is for 1024 samples
       // 0-1,i=0: current_bin=2.00 and next_bin=2.38 and int(2.0) < int(2.38) evaluates to 2<2 which is false and nothing gets counted this round
       // 1-2,i=1: current_bin=2.38 and next_bin=2.83 and 2!<2 : no counting
       // 2-3,i=2: current_bin=2.83 and next_bin=3.36 and 2<3 : counting
@@ -301,6 +295,7 @@ void logWave() {
       // 6-7,i=6: current_bin=5.64 and next_bin=6.71 and 5<6 : counting
       // 7-8,i=7: cuttent_bin=6.71 and next_bin=7.98 and 6<7 : counting
       // 8-9,i=8: cuttent_bin=7.98 and next_bin=9.49 and 7<9 : counting
+      // after i=8 the loop starts putting more than one sample into a bucket and there doesn't need to be any more hand holding
 
       for (int i = 0; i < BANDS; i++) {
           double next_bin = current_bin * bin_step;
@@ -311,7 +306,7 @@ void logWave() {
           int tmp_current_bin = 0;
           int tmp_next_bin = 1;
 
-          if(i==0) {
+          if(i==0) {  // making sure the loop doesn't skip anything
             tmp_current_bin = 0;
             tmp_next_bin = 1;
           } else if (i==1) {
@@ -367,9 +362,8 @@ void logWave() {
           // Serial.print(i == BANDS - 1 ? "" : " ");
           current_bin = next_bin;
 
-          waveHeights[i] = map(display_val, 0, 255, 0, 7);
+          waveHeights[i] = map(display_val, 0, 255, 0, 7);  // this is the data that I needed
       }
-      // Serial.println();
 
       // 5. Auto-Gain: Adjust peak_hold based on environment
       if (frame_max > peak_hold) peak_hold = frame_max; // React to loud noise instantly
@@ -388,20 +382,21 @@ void renderWave() {
   // calculate peak height decay
   for(int i = 0; i < numCols; i++) {
     if(long(currentMillis) - peaks[i].timestamp > peakInterval) {
+      // peakIDs.push_back(peaks[i].id); // save the id of the LED for fadeToBlackBy() later
       peaks[i].height--;
       if(crispPeak) {
-        leds[peaks[i].id] = CRGB::Black;
+        leds[peaks[i].id] = CRGB::Black;  // this is what currently keeps the fadeToBlackBy() for the amplitude LEDs from affecting the peak LEDs
       }
       peaks[i].id = getLEDFromCoordinate(i, peaks[i].height);
       peaks[i].timestamp = currentMillis;
     }
   }
 
-  // Move the height of each column one step closer to the height of the wave
+  // Set the height of each of the 32 columns
   for(int i = 0; i < numCols; i++) {
-    if(instant==true) {
+    if(instant==true) { // draw the columns as the same hieght as the wave instantly
       colHeights[i] = waveHeights[i];
-    } else {
+    } else {  // animate the height of the columns towarsds the height of the wave
       if(colHeights[i] > waveHeights[i]) {
         colHeights[i]--;
       }
@@ -415,6 +410,7 @@ void renderWave() {
 
     for(int light : colLEDs) {  // for each of those column leds, set their color
       leds[light] = amplitudeColor;
+      // amplitudeIDs.push_back(light); // save the id of the LED for fadeToBlackBy() later
     }
   }
 
@@ -434,6 +430,67 @@ void renderWave() {
     }
   }
 
+  // Serial.print(amplitudeIDs.size());
+  // Serial.print(" : ");
+  // Serial.print(peakIDs.size());
+  // Serial.println();
+
+  // std::sort(peakIDs.begin(), peakIDs.end());
+  // auto it = std::unique(peakIDs.begin(), peakIDs.end());
+  // peakIDs.erase(it, peakIDs.end());
+
+  // std::sort(amplitudeIDs.begin(), amplitudeIDs.end());
+  // it = std::unique(amplitudeIDs.begin(), amplitudeIDs.end());
+  // amplitudeIDs.erase(it, amplitudeIDs.end());
+
+  // removeElements(peakIDs, amplitudeIDs);    // this is the one that makes the fade heavier this is the one that should work
+                                            // it should remove anything from peakIDs that is in amplitudeIDs since the aIDs are never above the pIDs
+  // removeElements(amplitudeIDs, peakIDs); // this is the one that makes the fade lighter
+
+  // Serial.print(amplitudeIDs.size());
+  // Serial.print(" : ");
+  // Serial.print(peakIDs.size());
+  // Serial.print(" : ");
+  // Serial.print(peakIDs.size() + amplitudeIDs.size());
+  // Serial.println();
+
+  // Serial.print("A: ");
+  // for(int i=0; i<amplitudeIDs.size(); i++) {
+  //   // Serial.print("A: ");
+  //   // Serial.print(amplitudeIDs[i]);
+  //   // Serial.print(" : ");
+  //   leds[amplitudeIDs[i]].fadeToBlackBy(fadeTime[fadeAmplitudeStyle]);
+  // }
+  // Serial.println();
+
+  // Serial.print("P: ");
+  // for(int i=0; i<peakIDs.size(); i++) {
+  //   // Serial.print("P: ");
+  //   // Serial.print(peakIDs[i]);
+  //   // Serial.print(" : ");
+  //   leds[peakIDs[i]].fadeToBlackBy(fadeTime[fadePeakStyle]);
+  // }
+  // Serial.println();
+
+  // CRGB aIDs[amplitudeIDs.size()];
+  // for(int i = 0; i < amplitudeIDs.size(); i++) {
+  //   aIDs[i] = leds[amplitudeIDs[i]];
+  // }
+
+  // CRGB pIDs[peakIDs.size()];
+  // for(int i = 0; i < peakIDs.size(); i++) {
+  //   pIDs[i] = leds[peakIDs[i]];
+  // }
+
+  // show the LEDs
+  // fadeToBlackBy(leds, NUM_LEDS, fadeTime[fadeAmplitudeStyle]);
+  // fadeToBlackBy(leds, NUM_LEDS, fadeTime[fadePeakStyle]);
+  // fadeToBlackBy(aIDs, amplitudeIDs.size(), fadeTime[fadeAmplitudeStyle]);
+  // fadeToBlackBy(peakLEDs, numCols, fadeTime[fadePeakStyle]);
+  // fadeToBlackBy(pIDs, peakIDs.size(), fadeTime[fadePeakStyle]);
+
+  // Serial.println("*****");
+
   // show the LEDs
   fadeToBlackBy(leds, NUM_LEDS, fadeTime[fadeAmplitudeStyle]);
   FastLED.show();
@@ -441,6 +498,7 @@ void renderWave() {
   // Serial.println("*****");
 }
 
+// remove elements from the first array that exist in the second
 void removeElements(std::vector<int>& arr1, const std::vector<int>& arr2) {
     int i = 0, j = 0;
     while (i < arr1.size() && j < arr2.size()) {
