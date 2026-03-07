@@ -1,8 +1,6 @@
 #include <FastLED.h>
 #include <driver/i2s_std.h>
 #include <arduinoFFT.h>
-#include <Adafruit_GFX.h>    // Core graphics library
-#include <Adafruit_ST7789.h> // Hardware-specific library for ST7789
 
 /**
 *   Buttons
@@ -21,18 +19,6 @@ unsigned long buttonInterval = 50;
 
 bool crispPeak = true;
 bool instant = true;
-
-/**
-*   TFT Display Configuration
-*/
-#define TFT_DC    9
-#define TFT_RST   10
-#define TFT_CS    11
-#define TFT_MOSI  12
-#define TFT_SCLK  13
-// Initialize with Software SPI
-Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RST);
-
 
 /**
 *   Timing
@@ -71,8 +57,6 @@ const int SINE_WAVE = 0;
 const int LOG_WAVE = 1;
 int waveType = LOG_WAVE;
 
-std::vector<int> peakIDs;
-std::vector<int> amplitudeIDs;
 peakData peaks[numCols] = {0};
 int waveHeights[numCols] = {0};
 int colHeights[numCols] = {0};
@@ -157,18 +141,6 @@ void setup() {
 
   i2s_channel_init_std_mode(rx_handle, &std_cfg);
   i2s_channel_enable(rx_handle);
-
-  // INIT TFT
-  // tft.initR(INITR_MINI160x80);
-  tft.init(80, 160);
-  tft.setRotation(3);
-  // tft.invertDisplay(true);
-  tft.fillScreen(ST77XX_BLACK);
-  tft.setCursor(0, 0);
-  tft.setTextColor(ST77XX_WHITE);
-  // tft.setTextSize(2);
-  tft.println("Hello World!");
-  // tft.drawPixel(0, 0, 0xff9900);
 
   // INIT MULTI CORE
   xTaskCreatePinnedToCore(
@@ -377,12 +349,10 @@ void logWave() {  // the main audio processing function that is offloaded to the
 void renderWave() {
   // DRAW COLUMNS
   unsigned long currentMillis = millis();
-  amplitudeIDs.clear();
 
   // calculate peak height decay
   for(int i = 0; i < numCols; i++) {
     if(long(currentMillis) - peaks[i].timestamp > peakInterval) {
-      // peakIDs.push_back(peaks[i].id); // save the id of the LED for fadeToBlackBy() later
       peaks[i].height--;
       if(crispPeak) {
         leds[peaks[i].id] = CRGB::Black;  // this is what currently keeps the fadeToBlackBy() for the amplitude LEDs from affecting the peak LEDs
@@ -410,7 +380,7 @@ void renderWave() {
 
     for(int light : colLEDs) {  // for each of those column leds, set their color
       leds[light] = amplitudeColor;
-      // amplitudeIDs.push_back(light); // save the id of the LED for fadeToBlackBy() later
+      // leds[light].fadeToBlackBy(fadeTime[fadeAmplitudeStyle]);
     }
   }
 
@@ -426,70 +396,9 @@ void renderWave() {
     
     if(peaks[i].height >= 0) {
       leds[peaks[i].id] = peakColor;
-      // peakIDs.push_back(peaks[i].id);
+      // leds[peaks[i].id].fadeToBlackBy(fadeTime[fadePeakStyle]);
     }
   }
-
-  // Serial.print(amplitudeIDs.size());
-  // Serial.print(" : ");
-  // Serial.print(peakIDs.size());
-  // Serial.println();
-
-  // std::sort(peakIDs.begin(), peakIDs.end());
-  // auto it = std::unique(peakIDs.begin(), peakIDs.end());
-  // peakIDs.erase(it, peakIDs.end());
-
-  // std::sort(amplitudeIDs.begin(), amplitudeIDs.end());
-  // it = std::unique(amplitudeIDs.begin(), amplitudeIDs.end());
-  // amplitudeIDs.erase(it, amplitudeIDs.end());
-
-  // removeElements(peakIDs, amplitudeIDs);    // this is the one that makes the fade heavier this is the one that should work
-                                            // it should remove anything from peakIDs that is in amplitudeIDs since the aIDs are never above the pIDs
-  // removeElements(amplitudeIDs, peakIDs); // this is the one that makes the fade lighter
-
-  // Serial.print(amplitudeIDs.size());
-  // Serial.print(" : ");
-  // Serial.print(peakIDs.size());
-  // Serial.print(" : ");
-  // Serial.print(peakIDs.size() + amplitudeIDs.size());
-  // Serial.println();
-
-  // Serial.print("A: ");
-  // for(int i=0; i<amplitudeIDs.size(); i++) {
-  //   // Serial.print("A: ");
-  //   // Serial.print(amplitudeIDs[i]);
-  //   // Serial.print(" : ");
-  //   leds[amplitudeIDs[i]].fadeToBlackBy(fadeTime[fadeAmplitudeStyle]);
-  // }
-  // Serial.println();
-
-  // Serial.print("P: ");
-  // for(int i=0; i<peakIDs.size(); i++) {
-  //   // Serial.print("P: ");
-  //   // Serial.print(peakIDs[i]);
-  //   // Serial.print(" : ");
-  //   leds[peakIDs[i]].fadeToBlackBy(fadeTime[fadePeakStyle]);
-  // }
-  // Serial.println();
-
-  // CRGB aIDs[amplitudeIDs.size()];
-  // for(int i = 0; i < amplitudeIDs.size(); i++) {
-  //   aIDs[i] = leds[amplitudeIDs[i]];
-  // }
-
-  // CRGB pIDs[peakIDs.size()];
-  // for(int i = 0; i < peakIDs.size(); i++) {
-  //   pIDs[i] = leds[peakIDs[i]];
-  // }
-
-  // show the LEDs
-  // fadeToBlackBy(leds, NUM_LEDS, fadeTime[fadeAmplitudeStyle]);
-  // fadeToBlackBy(leds, NUM_LEDS, fadeTime[fadePeakStyle]);
-  // fadeToBlackBy(aIDs, amplitudeIDs.size(), fadeTime[fadeAmplitudeStyle]);
-  // fadeToBlackBy(peakLEDs, numCols, fadeTime[fadePeakStyle]);
-  // fadeToBlackBy(pIDs, peakIDs.size(), fadeTime[fadePeakStyle]);
-
-  // Serial.println("*****");
 
   // show the LEDs
   fadeToBlackBy(leds, NUM_LEDS, fadeTime[fadeAmplitudeStyle]);
