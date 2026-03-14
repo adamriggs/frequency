@@ -8,6 +8,8 @@
 #define BUTTON_0  17
 #define BUTTON_1  46
 #define BUTTON_2  18
+#define BUTTON_3  38
+#define ANALOG_1  2
 struct buttonStates {
   bool state;
   bool stateOld;
@@ -17,8 +19,12 @@ buttonStates buttons[3] = {0};
 unsigned long prevButtonMillis = 0;
 unsigned long buttonInterval = 50;
 
-bool crispPeak = true;
 bool instant = true;
+int knob = 0;
+const int KNOB_BRIGHTNESS = 0;
+const int KNOB_AMPLITUDE = 1;
+const int KNOB_PEAK = 2;
+int knobState = KNOB_BRIGHTNESS;
 
 /**
 *   Timing
@@ -27,7 +33,7 @@ int peakHangTime = 1024;  // the number of millis that it hangs at peak height b
 long peakInterval = 64; // the number of millis in between height decrements after hanging
 
 /**
-*   LED Matrix Configuration
+*   LED Matrix
 */
 #define LED_PIN     4         // Pin connected to data line
 #define NUM_LEDS    256       // Number of LEDs in your strip
@@ -73,11 +79,13 @@ waveColors colors[7] = {
 int currentColor = 0;
 CRGB amplitudeColor = colors[currentColor].amplitudeColor;
 CRGB peakColor = colors[currentColor].peakColor;
+// CHSV amplitudeColor = CHSV(125, 255, 255);
+// CHSV peakColor = CHSV(175, 255, 255);
 
 std::vector<int> getColumnArray(int col, int height); // function signature 
 
 /**
-*   i2s Configuration
+*   i2s
 */
 #define I2S_WS  7
 #define I2S_SD  5
@@ -87,7 +95,7 @@ std::vector<int> getColumnArray(int col, int height); // function signature
 i2s_chan_handle_t rx_handle;
 
 /**
-*   FFT Configuration
+*   FFT
 */
 
 #define SAMPLES 256
@@ -96,8 +104,6 @@ i2s_chan_handle_t rx_handle;
 // #define SAMPLING_FREQ 44100
 #define BANDS 32
 double peak_hold = 1000000.0; // Initial guess for "loudest" sound: initial was 1000000.0
-double peak_hold_arr[BANDS];  // One for each band
-double smoothed_display[BANDS];
 
 double vReal[SAMPLES]; // Real part of the input/output data
 double vImag[SAMPLES]; // Imaginary part of the input/output data (initialized to 0)
@@ -161,9 +167,32 @@ void setup() {
 void loop() {
   renderWave();
 
-  // handleButton(0, digitalRead(BUTTON_0));    // this one keeps accidentally triggering
+  handleButton(0, digitalRead(BUTTON_0));    // this one keeps accidentally triggering
   handleButton(1, digitalRead(BUTTON_1));
   handleButton(2, digitalRead(BUTTON_2));
+  // handleButton(3, digitalRead(BUTTON_3));
+
+  // knob = analogRead(ANALOG_1);
+  // handleKnob();
+}
+
+void handleKnob() {
+  knob = analogRead(ANALOG_1);
+  Serial.println(knob);
+
+  int knobScaled = map(knob, 0, 4095, 0, 255);
+
+  if(knobState == KNOB_BRIGHTNESS) {
+    FastLED.setBrightness(knobScaled);
+  }
+
+  if(knobState == KNOB_AMPLITUDE) {
+    amplitudeColor = CHSV(knobScaled, 255, 255);
+  }
+
+  if(knobState == KNOB_PEAK) {
+    peakColor = CHSV(knobScaled, 255, 255);
+  }
 }
 
 // handle button presses
@@ -172,37 +201,50 @@ void handleButton(int button, bool state) {
 
   if ((millis() - prevButtonMillis) > buttonInterval) {
     if(buttons[button].state == 1 && buttons[button].stateOld == 0) {
+      Serial.print("button:");
+      Serial.println(button);
       if(button == 0) {
         neopixelWrite(RGB_BUILTIN, 5, 0, 0);  // indicator so I know the button press was registered
-
-        if(instant == true) {
-          instant = false;
-        } else {
-          instant = true;
-        }
+        Serial.println("Button0 - Press");
+        
+        knobState = KNOB_BRIGHTNESS;
       }
 
       if(button == 1) {
         neopixelWrite(RGB_BUILTIN, 0, 5, 0);  // indicator so I know the button press was registered
+        Serial.println("Button1 - Press");
 
-        currentColor++;
-        if(currentColor >= sizeof(colors) / sizeof(colors[0])) {
-          currentColor = 0;
-        }
-        amplitudeColor = colors[currentColor].amplitudeColor;
-        peakColor = colors[currentColor].peakColor;
+        // currentColor++;
+        // if(currentColor >= sizeof(colors) / sizeof(colors[0])) {
+        //   currentColor = 0;
+        // }
+        // amplitudeColor = colors[currentColor].amplitudeColor;
+        // peakColor = colors[currentColor].peakColor;
+
+        knobState = KNOB_AMPLITUDE;
       }
 
       if(button == 2) {
         neopixelWrite(RGB_BUILTIN, 0, 0, 5);  // indicator so I know the button press was registered
-        if(crispPeak == true) {
-          crispPeak = false;
-        } else {
-          crispPeak = true;
-        }
+        Serial.println("Button2 - Press");
+
+        knobState = KNOB_PEAK;
+        
       }
+
+      // if(button == 3) {
+      //   neopixelWrite(RGB_BUILTIN, 5, 5, 5);  // indicator so I know the button press was registered
+      //   Serial.println("Button3 - Press");
+      // }
     }
   }
+
+  // if(knob!=0) {
+  //   Serial.print("knob:");
+  //   Serial.println(knob);
+  // }
+
+  // Serial.println("*****");
 
   if(buttons[button].state != buttons[button].stateOld) {
     buttons[button].stateOld = buttons[button].state;
@@ -354,9 +396,7 @@ void renderWave() {
   for(int i = 0; i < numCols; i++) {
     if(long(currentMillis) - peaks[i].timestamp > peakInterval) {
       peaks[i].height--;
-      if(crispPeak) {
-        leds[peaks[i].id] = CRGB::Black;  // this is what currently keeps the fadeToBlackBy() for the amplitude LEDs from affecting the peak LEDs
-      }
+      leds[peaks[i].id] = CRGB::Black;  // this is what currently keeps the fadeToBlackBy() for the amplitude LEDs from affecting the peak LEDs
       peaks[i].id = getLEDFromCoordinate(i, peaks[i].height);
       peaks[i].timestamp = currentMillis;
     }
